@@ -1,18 +1,11 @@
 #!/bin/bash
+# Output language follows ITJUSTTALKS_LANG (ja/en) or the locale.
 # ItJustTalksのビルド前提条件を読み取り専用で一括検査する。
 set -euo pipefail
 QUIET=0 INSTALL=0
 for arg in "$@"; do case "$arg" in --quiet) QUIET=1;; --install) INSTALL=1;; *) echo "Usage: $0 [--quiet] [--install]" >&2; exit 2;; esac; done
-UI_LANG="ja"
-request="$(printf '%s' "${ITJUSTTALKS_LANG:-}" | tr '[:upper:]' '[:lower:]')"
-case "$request" in
-  en|en[-_.]*) UI_LANG="en" ;;
-  ja|ja[-_.]*) UI_LANG="ja" ;;
-  "")
-    locale_request="$(printf '%s' "${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}" | tr '[:upper:]' '[:lower:]')"
-    case "$locale_request" in ""|ja*|c|c.*|posix) UI_LANG="ja" ;; *) UI_LANG="en" ;; esac ;;
-esac
-t() { [[ "$UI_LANG" == en ]] && printf '%s' "$2" || printf '%s' "$1"; }
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/ui_lang.sh"
+
 cd "$(dirname "$0")/.."; ROOT_DIR="$(pwd)"; source "$ROOT_DIR/scripts/lib/install_checks.sh"
 RESULT_LINES=(); ACTION_ITEMS=(); OVERALL_STATUS=0; WARN_COUNT=0
 record() { case "$1" in ok) RESULT_LINES+=("✅ $2");; warn) RESULT_LINES+=("⚠️ $2"); WARN_COUNT=$((WARN_COUNT + 1));; fail) RESULT_LINES+=("❌ $2"); OVERALL_STATUS=2;; esac; }
@@ -31,9 +24,9 @@ swift_version="$(swift --version 2>/dev/null | sed -n 's/.*Apple Swift version \
 if [[ "$swift_version" =~ ^([0-9]+)\.([0-9]+)$ ]] && { [[ ${BASH_REMATCH[1]} -gt 6 ]] || { [[ ${BASH_REMATCH[1]} -eq 6 && ${BASH_REMATCH[2]} -ge 4 ]]; }; }; then swift_ok=1; fi
 if [[ $swift_ok -eq 1 ]]; then record ok "$(t "Swiftのバージョンは${swift_version}です（6.4以上）" "Swift version is ${swift_version} (6.4 or later)")"; else record fail "$(t "Swift 6.4以上が必要です（検出値: ${swift_version:-不明}）" "Swift 6.4 or later is required (detected: ${swift_version:-unknown})")"; ACTION_ITEMS+=("$(t "\`softwareupdate --list\` を確認し、Swift 6.4以降を含む更新を導入してください。" "Check \`softwareupdate --list\` and install an update that includes Swift 6.4 or later.")"); fi
 
-# Keychain is three-valued; inaccessible is never treated as absent.
+# Keychain has four states; inaccessible is never treated as absent.
 keychain_state="$(itjusttalks_keychain_state)"; signing_exists=0
-case "$keychain_state" in found) signing_exists=1; record ok "$(t "コード署名用証明書 \"ItJustTalks Dev\" が見つかりました" "The code-signing certificate \"ItJustTalks Dev\" was found")";; absent) record warn "$(t "コード署名用証明書 \"ItJustTalks Dev\" はまだ作成されていません" "The code-signing certificate \"ItJustTalks Dev\" has not been created yet")"; ACTION_ITEMS+=("$(t "\`bash scripts/make_signing_cert.sh\` を実行して証明書を作成してください。" "Run \`bash scripts/make_signing_cert.sh\` to create the certificate.")");; inaccessible) record fail "$(t "Keychainにアクセスできません（証明書なしとは判定しません）" "The Keychain is inaccessible (not treated as a missing certificate)")"; ACTION_ITEMS+=("$(t "ログインキーチェーンを解除して再実行してください。証明書の削除や作り直しは不要です。" "Unlock the login Keychain and retry. Do not delete or recreate the certificate.")");; esac
+case "$keychain_state" in found) signing_exists=1; record ok "$(t "コード署名用証明書 \"ItJustTalks Dev\" が見つかりました" "The code-signing certificate \"ItJustTalks Dev\" was found")";; untrusted) record warn "$(t "証明書 \"ItJustTalks Dev\" は存在しますが、有効なコード署名アイデンティティとして信頼されていません" "The certificate \"ItJustTalks Dev\" exists but is not a valid/trusted code-signing identity")"; ACTION_ITEMS+=("$(t "\`bash scripts/make_signing_cert.sh\` を実行し、表示される手順で信頼設定を完了してください（新しい証明書は作りません）。" "Run \`bash scripts/make_signing_cert.sh\` and follow the steps it shows to complete the trust setting (it does not create a new certificate).")");; absent) record warn "$(t "コード署名用証明書 \"ItJustTalks Dev\" はまだ作成されていません" "The code-signing certificate \"ItJustTalks Dev\" has not been created yet")"; ACTION_ITEMS+=("$(t "\`bash scripts/make_signing_cert.sh\` を実行して証明書を作成してください。" "Run \`bash scripts/make_signing_cert.sh\` to create the certificate.")");; inaccessible) record fail "$(t "Keychainにアクセスできません（証明書なしとは判定しません）" "The Keychain is inaccessible (not treated as a missing certificate)")"; ACTION_ITEMS+=("$(t "ログインキーチェーンを解除して再実行してください。証明書の削除や作り直しは不要です。" "Unlock the login Keychain and retry. Do not delete or recreate the certificate.")");; esac
 openssl3="$(itjusttalks_find_openssl3 || true)"
 if [[ -n "$openssl3" ]]; then record ok "$(t "OpenSSL 3を実体検証しました: $openssl3" "OpenSSL 3 was verified: $openssl3")"; elif [[ $signing_exists -eq 1 ]]; then record warn "$(t "OpenSSL 3は見つかりませんが、証明書は作成済みです" "OpenSSL 3 was not found, but the certificate already exists")"; else record fail "$(t "OpenSSL 3が見つかりません（PATHと既知場所を検証しました）" "OpenSSL 3 was not found (PATH and known locations were checked)")"; ACTION_ITEMS+=("$(t "\`brew install openssl@3\` を実行してください。" "Run \`brew install openssl@3\`.")"); fi
 

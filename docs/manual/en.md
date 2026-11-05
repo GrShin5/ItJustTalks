@@ -24,7 +24,7 @@ A guide to turning speech into text, cleaning up writing, and rewriting text on 
 - [Appendix A: Installation with an AI agent](#appendix-a)
 - [Appendix B: Building from source yourself](#appendix-b)
 - [Appendix C: Version and distribution covered by this manual](#appendix-c)
-- [Appendix D: Updating with an AI agent](#appendix-d)
+- [Appendix D: Updating](#appendix-d)
 - [Appendix E: Moving from or using Koedex alongside ItJustTalks](#appendix-e)
 
 <a id="chapter-1"></a>
@@ -408,7 +408,7 @@ The tabs are “Settings”, “History”, and “Personal dictionary”. Defau
 | Restore defaults | — | Restores default hands-free keys |
 | Spoken trigger phrase | Preset phrase | Choose preset or custom. Japanese: ストップ送信; English: Send Now |
 | Custom phrase | Empty | 4–20 visible character clusters on one line. No quotation marks or phrase identical to the preset. Can be edited and saved |
-| Send key | Return | Return / Command + Return / Control + Return |
+| Send key | Enter | Enter / ⌘ Enter / ⌃ Enter |
 | Automatically send in external apps | OFF | Consent with an additional confirmation. Available only when Compatibility Input and hands-free send are enabled |
 
 ### History tab
@@ -695,6 +695,7 @@ The storage location is `~/Library/Application Support/ItJustTalks/`, separate f
 | AI Command custom instruction state | `ai_command_custom_instruction_state.json` |
 | Operational logs | `logs/itjusttalks.log` and rotated files |
 | Setup restart information | `onboarding_restart_intent.json` |
+| Signing certificate copy | `itjusttalks_dev_cert.crt`; created only when certificate creation could not finish the trust setting, so you can complete it manually |
 
 History may contain text. See [Chapter 9](#chapter-9) for what is saved and how to turn saving OFF. Logs and history are separate.
 
@@ -879,7 +880,7 @@ Only if you will no longer update or rebuild with this signature, open Keychain 
 
 If you are unfamiliar with Terminal, you can ask an AI agent that can work with local Mac folders and run commands to install the app. An AI agent is not needed for normal app use.
 
-1. Open the [installation prompt](../agent-install-prompt.md). The source is `https://github.com/GrShin5/ItJustTalks`.
+1. Open the [installation prompt](../agent-install-prompt.en.md). The source is `https://github.com/GrShin5/ItJustTalks`.
 2. Choose a local working folder outside sync in the agent and paste the entire code block.
 3. Read the preflight results. If a new certificate is needed, review the explanation of Keychain registration and signing trust settings before approving. Handle macOS authentication and permissions yourself.
 4. Review build, signing, and placement verification results, then launch from Finder and follow [first-time setup in Chapter 5](#chapter-5).
@@ -893,9 +894,12 @@ The prompt prohibits uploading data, changing security settings, and accessing K
 
 - A Mac running macOS 27. See [Chapter 3](#chapter-3) for AI requirements.
 - Xcode supporting macOS 27, or Command Line Tools.
-- Git and OpenSSL 3 for certificate creation.
+- Git and OpenSSL 3 for certificate creation. If OpenSSL 3 is missing, preflight suggests `brew install openssl@3` (requires Homebrew).
+- An account that can write to the Applications folder (normally an administrator account). The installer places the app there directly.
 - At least 2 GB free space. This is the minimum checked by preflight, not a guarantee of enough space for every task.
 - ItJustTalks source obtained from a verified distributor. Get the source with `git clone https://github.com/GrShin5/ItJustTalks`, not a ZIP download. Keep it outside Desktop, Documents, iCloud Drive, and File Provider storage, for example at `~/Developer/ItJustTalks`. Otherwise preflight fails and the build stops.
+
+Script messages follow the locale (LC_ALL, LC_MESSAGES, or LANG) and are in Japanese when it is unset, C, or POSIX. To get English output, prefix each command with `ITJUSTTALKS_LANG=en`, for example `ITJUSTTALKS_LANG=en bash scripts/preflight.sh`.
 
 Exact compatible development-tool versions have not been verified. Open the source working folder in Terminal and follow these steps in order. If an error occurs, stop and read the message.
 
@@ -960,14 +964,16 @@ Finally, launch `ItJustTalks.app` from Finder and complete first-time setup. Bui
 | Minimum environment | macOS 27. Check AI hardware support and readiness separately |
 | Installation method | Build from source, self-sign, and install |
 | Standard app output | `dist/ItJustTalks.app` |
-| First-time setup checks | `dist/ItJustTalks Debug.app`; not an app for testing every feature of the standard version |
+| First-time setup checks | `dist/ItJustTalks Debug.app`, built with `bash scripts/make_app.sh onboarding-debug`; not an app for testing every feature of the standard version |
 
-This manual is based on facts from the current source. It does not guarantee that future distribution methods or OS specifications will remain unchanged.
+This manual is based on the current source. It does not guarantee that future distribution methods or OS specifications will remain unchanged.
 
 <a id="appendix-d"></a>
-## Appendix D: Updating with an AI agent
+## Appendix D: Updating
 
-1. Open the [update prompt](../agent-update-prompt.md) and give the entire code block to the agent. The source is `https://github.com/GrShin5/ItJustTalks`.
+### Updating with an AI agent
+
+1. Open the [update prompt](../agent-update-prompt.en.md) and give the entire code block to the agent. The source is `https://github.com/GrShin5/ItJustTalks`.
 2. Have it check the current app, source state, and target version. Stop if there are uncommitted changes or a signature mismatch.
 3. Save your work and quit ItJustTalks. Have the agent build the new version with the same identifier and signature and verify continuity with the old version.
 4. Review the proposed backup location, installation location, and recovery steps. Approve immediately before the old app is moved aside. Keep the old version instead of deleting it.
@@ -976,6 +982,34 @@ This manual is based on facts from the current source. It does not guarantee tha
 `install_app.sh` does not overwrite an existing app. The update prompt combines moving the old app aside with signature checks, stops on failure, and explains recovery. It does not recreate certificates or reset all permissions on its own. A new certificate requires separate prior approval, but the update must not proceed without signature continuity.
 
 Uploading user data and changing security settings are prohibited. Koedex's app and data are also left untouched. Keep the old app until the new version has passed your checks.
+
+### Updating without an agent
+
+Follow the same flow yourself in Terminal, in the source folder obtained with `git clone`. Stop at any error.
+
+1. Check `git remote -v` (it must point to `https://github.com/GrShin5/ItJustTalks`) and `git status --short`. Stop if the source differs or there are uncommitted changes. Then run `git fetch` and switch to the tag or commit you want (for example `git switch --detach <tag or commit>`).
+2. Save your work and quit ItJustTalks. Keep the path of the current app in a variable and verify it:
+   ```sh
+   previous_app="/Applications/ItJustTalks.app"
+   bash scripts/preflight.sh
+   bash scripts/verify_app_identity.sh "$previous_app"
+   ```
+   Preflight reporting the existing app is expected. Reuse the existing certificate; do not create a new one for an update.
+3. Build the new version and confirm signature continuity:
+   ```sh
+   bash scripts/make_app.sh release --previous-app "$previous_app"
+   bash scripts/verify_app_identity.sh "$previous_app" dist/ItJustTalks.app
+   ```
+   If the identifier or signature does not match, stop and keep the old app where it is.
+4. In Finder, create a folder for the old version outside sync storage on the same disk (for example `~/ItJustTalks-backups/0.1.0`) and move `ItJustTalks.app` from Applications into it. Do not delete it.
+5. Confirm that Applications no longer contains `ItJustTalks.app`, then install and compare:
+   ```sh
+   bash scripts/preflight.sh --install
+   bash scripts/install_app.sh
+   bash scripts/verify_app_identity.sh "$HOME/ItJustTalks-backups/0.1.0/ItJustTalks.app" /Applications/ItJustTalks.app
+   ```
+   Replace the first path with the backup location you chose.
+6. Launch the new version and check settings, history, dictionary, microphone, keys, and input of a short synthetic sentence. If something fails, quit the app, move the new version aside, and move the old version back to Applications. Keep the old version until your checks are done.
 
 <a id="appendix-e"></a>
 ## Appendix E: Moving from or using Koedex alongside ItJustTalks

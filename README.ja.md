@@ -50,7 +50,7 @@ ItJustTalks 0.1.0 は、macOS 27用の完全無料・完全ローカルの音声
 
 ## インストール・更新
 
-配布方式はソースビルド＋このMacの自己署名証明書です。Git、macOS 27対応の開発ツール（Swift 6.4以上とmacOS 27のSDK）、証明書作成用のOpenSSL 3が必要です。事前確認のSwift 6.4以上判定だけでSDK互換性は保証しません。
+配布方式はソースビルド＋このMacの自己署名証明書です。Git、macOS 27対応の開発ツール（Swift 6.4以上とmacOS 27のSDK）、証明書作成用のOpenSSL 3（例：Homebrewで`brew install openssl@3`）、アプリケーションフォルダへ書き込めるアカウント（通常は管理者アカウント）が必要です。事前確認のSwift 6.4以上判定だけでSDK互換性は保証しません。
 
 ソースはZIPダウンロードではなく、`git clone https://github.com/GrShin5/ItJustTalks`で取得してください。Desktop・Documents・iCloud Drive・File Providerの配下を避け、例えば`~/Developer/ItJustTalks`に配置します。条件を満たさないと事前確認が失敗し、ビルドも停止します。
 
@@ -65,7 +65,9 @@ bash scripts/preflight.sh --install
 bash scripts/install_app.sh
 ```
 
-エラー時は停止してください。既存の有効な署名は再利用し、検証を省略しません。インストール用スクリプトは既存アプリを上書きしません。導入は[導入プロンプト](docs/agent-install-prompt.md)と[付録A](docs/manual/ja.md#appendix-a)、更新は[更新プロンプト](docs/agent-update-prompt.md)と[付録D](docs/manual/ja.md#appendix-d)でも案内しています。AIエージェントはアプリの通常利用には不要です。
+スクリプトの表示はロケールに従い、未設定・C・POSIXの時は日本語です。英語にする時は`ITJUSTTALKS_LANG=en`を付けます（例：`ITJUSTTALKS_LANG=en bash scripts/preflight.sh`）。
+
+エラー時は停止してください。既存の有効な署名は再利用し、検証を省略しません。インストール用スクリプトは既存アプリを上書きしません。導入は[導入プロンプト](docs/agent-install-prompt.md)と[付録A](docs/manual/ja.md#appendix-a)、更新は[更新プロンプト](docs/agent-update-prompt.md)と[付録D](docs/manual/ja.md#appendix-d)でも案内しています。エージェントを使わない更新は[付録D](docs/manual/ja.md#appendix-d)を参照してください。AIエージェントはアプリの通常利用には不要です。
 
 ## プライバシー
 
@@ -79,4 +81,4 @@ bash scripts/install_app.sh
 
 Koedex（Copyright 2026 GrShin5）から派生しています。[Apache License 2.0](LICENSE)で提供し、帰属表示は[NOTICE](NOTICE)を参照してください。
 
-Apple、macOS、Apple IntelligenceはApple Inc.の商標です。本プロジェクトはAppleと提携していません。
+Apple、macOS、Apple IntelligenceはApple Inc.の商標です。本プロジェクトはAppleと提携していません。その他の製品名・会社名は各社の商標です。

@@ -1,7 +1,6 @@
 #!/bin/bash
 # Fail if any tracked file still names the upstream project (case-insensitive
-# "koedex") outside scripts/identifier_allowlist.txt (and, when present, the
-# development-only list docs/dev/identifier_allowlist.dev.txt).
+# "koedex") outside scripts/identifier_allowlist.txt.
 # Checks paths, contents (binary files included) and symlink targets of tracked files
 # (plus untracked, non-ignored files so new files are caught before they are committed).
 # Also fails if "applicationSupportDirectory" appears under Sources/ outside the two
@@ -17,17 +16,13 @@ PATTERN="koedex"
 [[ -f "$ALLOWLIST" ]] || { echo "error: $ALLOWLIST not found" >&2; exit 2; }
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "error: not a git work tree" >&2; exit 2; }
 
-DEV_ALLOWLIST="docs/dev/identifier_allowlist.dev.txt"
 ALLOW_GLOBS=()
-for list in "$ALLOWLIST" "$DEV_ALLOWLIST"; do
-  [[ -f "$list" ]] || continue
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    line="${line%%#*}"
-    line="${line#"${line%%[![:space:]]*}"}"
-    line="${line%"${line##*[![:space:]]}"}"
-    [[ -n "$line" ]] && ALLOW_GLOBS+=("$line")
-  done < "$list"
-done
+while IFS= read -r line || [[ -n "$line" ]]; do
+  line="${line%%#*}"
+  line="${line#"${line%%[![:space:]]*}"}"
+  line="${line%"${line##*[![:space:]]}"}"
+  [[ -n "$line" ]] && ALLOW_GLOBS+=("$line")
+done < "$ALLOWLIST"
 
 is_allowed() {
   local path="$1" glob

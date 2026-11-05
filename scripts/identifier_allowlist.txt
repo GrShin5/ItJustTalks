@@ -19,6 +19,8 @@ CODE_OF_CONDUCT.md                        # code of conduct
 docs/manual/*                             # user manual
 docs/agent-install-prompt.md              # install guide for agents
 docs/agent-update-prompt.md               # update guide for agents
+docs/agent-install-prompt.en.md           # install guide for agents (English)
+docs/agent-update-prompt.en.md            # update guide for agents (English)
 
 # Test sandbox that must name upstream storage paths in order to deny them.
 scripts/dev/koedex-deny.sb                # sandbox profile denying upstream storage

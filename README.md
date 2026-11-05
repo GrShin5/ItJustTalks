@@ -50,7 +50,7 @@ See [Chapter 3: Requirements and known limitations](docs/manual/en.md#chapter-3)
 
 ## Install and update
 
-Distribution is by building from source and signing with a self-signed certificate on this Mac. Git, development tools supporting macOS 27 (Swift 6.4 or later with the macOS 27 SDK), and OpenSSL 3 for certificate creation are required. Preflight's Swift 6.4 minimum does not guarantee SDK compatibility.
+Distribution is by building from source and signing with a self-signed certificate on this Mac. Git, development tools supporting macOS 27 (Swift 6.4 or later with the macOS 27 SDK), OpenSSL 3 for certificate creation (for example, `brew install openssl@3` with Homebrew), and an account that can write to the Applications folder (normally an administrator account) are required. Preflight's Swift 6.4 minimum does not guarantee SDK compatibility.
 
 Get the source with `git clone https://github.com/GrShin5/ItJustTalks`, not a ZIP download. Keep it outside Desktop, Documents, iCloud Drive, and File Provider storage, for example at `~/Developer/ItJustTalks`. Otherwise preflight fails and the build stops.
 
@@ -65,7 +65,9 @@ bash scripts/preflight.sh --install
 bash scripts/install_app.sh
 ```
 
-Stop on errors. Reuse a valid existing identity and keep verification enabled. The installer does not overwrite an existing app. The [install prompt](docs/agent-install-prompt.md) and [Appendix A](docs/manual/en.md#appendix-a), or [update prompt](docs/agent-update-prompt.md) and [Appendix D](docs/manual/en.md#appendix-d), provide agent-assisted instructions. An AI coding agent is not needed for normal app use.
+Script messages follow the locale (LC_ALL, LC_MESSAGES, or LANG) and are in Japanese when it is unset, C, or POSIX; run them with `ITJUSTTALKS_LANG=en` (for example, `ITJUSTTALKS_LANG=en bash scripts/preflight.sh`) to get English output.
+
+Stop on errors. Reuse a valid existing identity and keep verification enabled. The installer does not overwrite an existing app. The [install prompt](docs/agent-install-prompt.en.md) and [Appendix A](docs/manual/en.md#appendix-a), or [update prompt](docs/agent-update-prompt.en.md) and [Appendix D](docs/manual/en.md#appendix-d), provide agent-assisted instructions. To update without an agent, see [Appendix D](docs/manual/en.md#appendix-d). An AI coding agent is not needed for normal app use.
 
 ## Privacy
 
@@ -79,4 +81,4 @@ Settings, dictionary, and history use independent local ItJustTalks storage; Koe
 
 Derived from Koedex (Copyright 2026 GrShin5). Distributed under the [Apache License 2.0](LICENSE); see [NOTICE](NOTICE) for attribution.
 
-Apple, macOS, and Apple Intelligence are trademarks of Apple Inc. This project is not affiliated with Apple.
+Apple, macOS, and Apple Intelligence are trademarks of Apple Inc. This project is not affiliated with Apple. Other product and company names are trademarks of their respective owners.

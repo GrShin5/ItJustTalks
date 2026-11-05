@@ -24,7 +24,7 @@ Macの中で音声を文字にし、文章を整えたり、書き換えたり�
 - [付録A：AIエージェントに導入を任せる](#appendix-a)
 - [付録B：自分でソースからビルドする](#appendix-b)
 - [付録C：この説明書が対象とするバージョンと配布形態](#appendix-c)
-- [付録D：AIエージェントに更新を任せる](#appendix-d)
+- [付録D：更新する](#appendix-d)
 - [付録E：Koedex から移る方・併用する方](#appendix-e)
 
 <a id="chapter-1"></a>
@@ -408,7 +408,7 @@ HUDの×で録音や処理を取り消せます。取り消した処理のAI結�
 | デフォルトに戻す | — | ハンズフリーキーを既定へ |
 | 音声トリガーフレーズ | プリセットフレーズ | プリセット/カスタムを選択。日本語はストップ送信、英語はSend Now |
 | カスタムフレーズ | 空 | 見た目の文字のまとまりで4〜20文字、1行。引用符やプリセットと同じ句は不可。編集・保存が可能 |
-| 送信キー | Return | Return / Command＋Return / Control＋Return |
+| 送信キー | Enter | Enter / ⌘ Enter / ⌃ Enter |
 | 外部アプリでも自動送信する | OFF | 追加確認を伴う同意。互換入力とハンズフリーが有効時のみ操作可 |
 
 ### 「履歴」タブ
@@ -695,6 +695,7 @@ Universal Clipboard、他社のクリップボード履歴、バックアップ�
 | AIに指示用のカスタム指示状態 | `ai_command_custom_instruction_state.json` |
 | 動作ログ | `logs/itjusttalks.log`と世代ファイル |
 | セットアップの再起動情報 | `onboarding_restart_intent.json` |
+| 署名証明書の控え | `itjusttalks_dev_cert.crt`。証明書の作成で信頼設定を完了できなかった時だけ作られ、手動で完了するために使います |
 
 履歴には本文が保存される場合があります。保存する内容とOFFにする方法は[9章](#chapter-9)を確認してください。ログと履歴は別です。
 
@@ -893,9 +894,12 @@ AIに指示の履歴に残るのは、話した指示の文字起こしです。
 
 - macOS 27のMac。AIの利用条件は[3章](#chapter-3)を確認してください。
 - Xcode（macOS 27 対応版）または Command Line Tools。
-- Gitと、証明書作成に使うOpenSSL 3。
+- Gitと、証明書作成に使うOpenSSL 3。OpenSSL 3がない場合、事前確認は`brew install openssl@3`を案内します（Homebrewが必要）。
+- アプリケーションフォルダへ書き込めるアカウント（通常は管理者アカウント）。インストール用スクリプトはそこへ直接配置します。
 - 2 GB以上の空き容量。事前確認が調べる最低限であり、すべての作業に十分な容量を保証するものではありません。
 - 配布元を確認して入手したItJustTalksのソース。ソースはZIPダウンロードではなく、`git clone https://github.com/GrShin5/ItJustTalks`で取得してください。Desktop・Documents・iCloud Drive・File Providerの配下を避け、例えば`~/Developer/ItJustTalks`に配置します。条件を満たさないと事前確認が失敗し、ビルドも停止します。
+
+スクリプトの表示はロケール（LC_ALL・LC_MESSAGES・LANG）に従い、未設定・C・POSIXの時は日本語です。英語で表示する時は、各コマンドの前に`ITJUSTTALKS_LANG=en`を付けます。
 
 開発ツールの正確な対応版は未確認です。ソースの作業フォルダをターミナルで開き、以下を順番に進めます。途中でエラーになったら止め、表示内容を確認してください。
 
@@ -960,12 +964,14 @@ bash scripts/install_app.sh
 | 最小環境 | macOS 27。AIの対応機種・準備状態は別途確認します |
 | 導入方式 | ソースからビルドし、自己署名してインストール |
 | 通常版の成果物 | `dist/ItJustTalks.app` |
-| 初回セットアップ確認用 | `dist/ItJustTalks Debug.app`。通常版の全機能を試すアプリではありません |
+| 初回セットアップ確認用 | `dist/ItJustTalks Debug.app`（`bash scripts/make_app.sh onboarding-debug`で作成）。通常版の全機能を試すアプリではありません |
 
-この説明書は、現行ソースの事実集に基づきます。将来の配布形態やOS仕様が変わらないという保証ではありません。
+この説明書は、現行ソースの内容に基づきます。将来の配布形態やOS仕様が変わらないという保証ではありません。
 
 <a id="appendix-d"></a>
-## 付録D：AIエージェントに更新を任せる
+## 付録D：更新する
+
+### AIエージェントに更新を任せる
 
 1. [更新プロンプト](../agent-update-prompt.md)を開き、コードブロック全体をエージェントに渡します。取得元は`https://github.com/GrShin5/ItJustTalks`です。
 2. 現在のアプリ、ソースの状態、更新先の版を確認してもらいます。未コミット変更や署名の不一致があれば停止します。
@@ -976,6 +982,34 @@ bash scripts/install_app.sh
 `install_app.sh`は既存アプリを上書きしません。更新プロンプトは旧版の退避と署名検証を組み合わせ、失敗時は停止して復旧方法を案内します。証明書を勝手に作り直したり、権限を一括初期化したりする手順ではありません。新規証明書が必要なら別途事前承認を求めますが、署名が継続しなければ更新しません。
 
 利用者データのアップロードやセキュリティ設定の変更は禁止です。Koedexのアプリ・データにも触れません。退避した旧版は、新版の動作確認が終わるまで残してください。
+
+### エージェントを使わずに更新する
+
+`git clone`で取得したソースのフォルダをターミナルで開き、同じ流れを自分で進めます。エラーが出たらそこで止めます。
+
+1. `git remote -v`（取得元が`https://github.com/GrShin5/ItJustTalks`であること）と`git status --short`を確認し、取得元が違う・未コミットの変更がある時は止めます。そのあと`git fetch`を実行し、使うタグまたはコミットに切り替えます（例：`git switch --detach <タグまたはコミット>`）。
+2. 作業を保存してItJustTalksを終了します。今のアプリの場所を変数に入れて検証します。
+   ```sh
+   previous_app="/Applications/ItJustTalks.app"
+   bash scripts/preflight.sh
+   bash scripts/verify_app_identity.sh "$previous_app"
+   ```
+   事前確認が既存アプリを報告するのは想定どおりです。証明書は既存のものを使い、更新のために作り直しません。
+3. 新版を作り、署名が続いていることを確かめます。
+   ```sh
+   bash scripts/make_app.sh release --previous-app "$previous_app"
+   bash scripts/verify_app_identity.sh "$previous_app" dist/ItJustTalks.app
+   ```
+   識別子や署名が一致しなければ止め、旧版はそのままにします。
+4. Finderで、同じディスクの同期対象外に旧版用のフォルダ（例：`~/ItJustTalks-backups/0.1.0`）を作り、アプリケーションフォルダの`ItJustTalks.app`をそこへ移動します。削除はしません。
+5. アプリケーションフォルダに`ItJustTalks.app`がないことを確かめてから、インストールして比較します。
+   ```sh
+   bash scripts/preflight.sh --install
+   bash scripts/install_app.sh
+   bash scripts/verify_app_identity.sh "$HOME/ItJustTalks-backups/0.1.0/ItJustTalks.app" /Applications/ItJustTalks.app
+   ```
+   1つ目のパスは、選んだ退避先に置き換えます。
+6. 新版を起動し、設定・履歴・辞書とマイク・キー・短い合成文の入力を確認します。問題があればアプリを終了し、新版を別の場所へ移してから、旧版をアプリケーションフォルダへ戻します。確認が終わるまで旧版を残してください。
 
 <a id="appendix-e"></a>
 ## 付録E：Koedex から移る方・併用する方

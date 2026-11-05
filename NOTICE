@@ -8,4 +8,10 @@ See LICENSE for the full text of the Apache License, Version 2.0.
 
 Apple, macOS, and Apple Intelligence are trademarks of
 Apple Inc. This project is not affiliated with, sponsored by, or endorsed
-by Apple Inc.
+by Apple Inc. Other product and company names are trademarks of their
+respective owners.
+
+The icons in Assets/Branding and the screenshots in docs/manual/images are
+original works by GrShin5, licensed under the Apache License, Version 2.0.
+macOS user interface elements shown in the screenshots belong to Apple Inc.
+and are not covered by this license.

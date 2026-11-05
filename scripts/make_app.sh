@@ -1,6 +1,9 @@
 #!/bin/bash
+# Output language follows ITJUSTTALKS_LANG (ja/en) or the locale.
 # swift build成果物を ItJustTalks.app バンドルに組み立てるスクリプト。
 set -euo pipefail
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/ui_lang.sh"
 
 cd "$(dirname "$0")/.."
 ROOT_DIR="$(pwd)"
@@ -16,25 +19,25 @@ while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --previous-app)
       [[ "$#" -ge 2 ]] || {
-        echo "エラー: --previous-app には更新前の.appへのパスが必要です。" >&2
+        echo "$(t "エラー: --previous-app には更新前の.appへのパスが必要です。" "Error: --previous-app requires the path to the previous .app.")" >&2
         exit 1
       }
       [[ -z "$PREVIOUS_APP_PATH" ]] || {
-        echo "エラー: --previous-app は1回だけ指定できます。" >&2
+        echo "$(t "エラー: --previous-app は1回だけ指定できます。" "Error: --previous-app may only be specified once.")" >&2
         exit 1
       }
       PREVIOUS_APP_PATH="$2"
       shift 2
       ;;
     *)
-      echo "Usage: $0 [debug|release|onboarding-debug] [--previous-app /path/to/ItJustTalks.app]" >&2
+      echo "$(t "Usage: $0 [debug|release|onboarding-debug] [--previous-app /path/to/ItJustTalks.app]" "Usage: $0 [debug|release|onboarding-debug] [--previous-app /path/to/ItJustTalks.app]")" >&2
       exit 1
       ;;
   esac
 done
 
 if [[ "$CONFIGURATION" != "debug" && "$CONFIGURATION" != "release" && "$CONFIGURATION" != "onboarding-debug" ]]; then
-  echo "Usage: $0 [debug|release|onboarding-debug] [--previous-app /path/to/ItJustTalks.app]" >&2
+  echo "$(t "Usage: $0 [debug|release|onboarding-debug] [--previous-app /path/to/ItJustTalks.app]" "Usage: $0 [debug|release|onboarding-debug] [--previous-app /path/to/ItJustTalks.app]")" >&2
   exit 1
 fi
 
@@ -43,7 +46,7 @@ fi
 if [[ -f "$ROOT_DIR/scripts/preflight.sh" ]]; then
   if ! PREFLIGHT_OUTPUT="$(bash "$ROOT_DIR/scripts/preflight.sh" --quiet 2>&1)"; then
     echo "$PREFLIGHT_OUTPUT" >&2
-    echo "=== 失敗: 前提条件が満たされていません ===" >&2
+    echo "$(t "=== 失敗: 前提条件が満たされていません ===" "=== Failed: Prerequisites are not met ===")" >&2
     exit 2
   fi
   [[ -n "$PREFLIGHT_OUTPUT" ]] && echo "$PREFLIGHT_OUTPUT"
@@ -59,21 +62,21 @@ done < <(printf '%s\n' "$IDENTITY_LIST" | awk -v certificate_name="$CERT_NAME" '
 ')
 
 if [[ "${#MATCHING_IDENTITIES[@]}" -gt 1 ]]; then
-  cat >&2 <<EOF
-エラー: "$CERT_NAME" と同名の有効なコード署名アイデンティティが複数あります。
+  printf '%s\n' "$(t "エラー: \"$CERT_NAME\" と同名の有効なコード署名アイデンティティが複数あります。
 
 権限を維持するには、毎回同じ証明書を使う必要があります。不要な同名証明書を
-キーチェーンから整理して1つにしてから、もう一度実行してください。
-EOF
-  echo "=== 失敗: 前提条件が満たされていません ===" >&2
+キーチェーンから整理して1つにしてから、もう一度実行してください。" "Error: More than one valid code-signing identity is named \"$CERT_NAME\".
+
+To preserve permissions, you must use the same certificate for every build.
+Remove unneeded duplicate certificates from the Keychain so that only one remains, then retry.")" >&2
+  echo "$(t "=== 失敗: 前提条件が満たされていません ===" "=== Failed: Prerequisites are not met ===")" >&2
   exit 2
 fi
 
 SIGN_IDENTITY="${MATCHING_IDENTITIES[0]:-}"
 
 if [[ ! "$SIGN_IDENTITY" =~ ^[[:xdigit:]]{40}$ ]]; then
-  cat >&2 <<EOF
-エラー: 安定したコード署名アイデンティティ "$CERT_NAME" が見つかりません。
+  printf '%s\n' "$(t "エラー: 安定したコード署名アイデンティティ \"$CERT_NAME\" が見つかりません。
 
 マイク、音声認識、アクセシビリティのmacOS権限を更新後も維持するため、
 ad-hoc署名（codesign --sign -）ではItJustTalks.appを作成しません。
@@ -81,12 +84,22 @@ ad-hoc署名（codesign --sign -）ではItJustTalks.appを作成しません。
 次の手順で準備してください:
   1. bash scripts/make_signing_cert.sh
   2. 表示されるmacOSの認証ダイアログで、コード署名の信頼設定を承認する
-  3. security find-identity -v -p codesigning を実行し、"$CERT_NAME" を確認する
+  3. security find-identity -v -p codesigning を実行し、\"$CERT_NAME\" を確認する
 
 証明書がkeychainにあるのに使えない場合は、次も参照してください:
-  bash scripts/make_signing_cert.sh --interactive-help
-EOF
-  echo "=== 失敗: 前提条件が満たされていません ===" >&2
+  bash scripts/make_signing_cert.sh --interactive-help" "Error: A stable code-signing identity named \"$CERT_NAME\" was not found.
+
+To preserve macOS microphone, speech recognition, and accessibility permissions after updates,
+ItJustTalks.app will not be built with ad-hoc signing (codesign --sign -).
+
+Prepare the certificate as follows:
+  1. bash scripts/make_signing_cert.sh
+  2. Approve code-signing trust in the macOS authentication dialog.
+  3. Run security find-identity -v -p codesigning and check for \"$CERT_NAME\".
+
+If the certificate exists in the Keychain but cannot be used, also see:
+  bash scripts/make_signing_cert.sh --interactive-help")" >&2
+  echo "$(t "=== 失敗: 前提条件が満たされていません ===" "=== Failed: Prerequisites are not met ===")" >&2
   exit 2
 fi
 
@@ -95,38 +108,39 @@ PINNED_SIGN_IDENTITY=""
 if [[ -f "$IDENTITY_STATE_FILE" ]]; then
   PINNED_SIGN_IDENTITY="$(tr -d '[:space:]' < "$IDENTITY_STATE_FILE")"
   if [[ ! "$PINNED_SIGN_IDENTITY" =~ ^[[:xdigit:]]{40}$ ]]; then
-    echo "エラー: 署名IDの固定情報が壊れています: $IDENTITY_STATE_FILE" >&2
-    echo "=== 失敗: 前提条件が満たされていません ===" >&2
+    echo "$(t "エラー: 署名IDの固定情報が壊れています: $IDENTITY_STATE_FILE" "Error: The saved signing identity is invalid: $IDENTITY_STATE_FILE")" >&2
+    echo "$(t "=== 失敗: 前提条件が満たされていません ===" "=== Failed: Prerequisites are not met ===")" >&2
     exit 2
   fi
   PINNED_SIGN_IDENTITY="$(printf '%s' "$PINNED_SIGN_IDENTITY" | tr '[:lower:]' '[:upper:]')"
   if [[ "$SIGN_IDENTITY" != "$PINNED_SIGN_IDENTITY" ]]; then
-    cat >&2 <<EOF
-エラー: 今回選ばれた署名証明書が、ItJustTalksで固定済みの証明書と一致しません。
+    printf '%s\n' "$(t "エラー: 今回選ばれた署名証明書が、ItJustTalksで固定済みの証明書と一致しません。
 
 固定済みの証明書を使用するか、署名を変更する理由と既存利用者への権限再許可の
-影響を確認してから、明示的な署名移行手順を行ってください。
-EOF
-    echo "=== 失敗: 署名または配置に失敗しました ===" >&2
+影響を確認してから、明示的な署名移行手順を行ってください。" "Error: The selected signing certificate does not match the certificate saved for ItJustTalks.
+
+Use the saved certificate, or review why the signature needs to change and the effect on
+existing users' permissions before following an explicit signing migration procedure.")" >&2
+    echo "$(t "=== 失敗: 署名または配置に失敗しました ===" "=== Failed: Signing or placement failed ===")" >&2
     exit 4
   fi
 fi
 
-echo "=== 署名: 安定した \"$CERT_NAME\" 証明書を使用 ==="
+echo "$(t "=== 署名: 安定した \"$CERT_NAME\" 証明書を使用 ===" "=== Signing: Using the stable \"$CERT_NAME\" certificate ===")"
 
 if [[ "$CONFIGURATION" == "release" ]]; then
-  echo "=== swift build (-c release) ==="
+  echo "$(t "=== swift build (-c release) ===" "=== swift build (-c release) ===")"
   if ! swift build -c release; then
-    echo "=== 失敗: swift buildに失敗しました ===" >&2
-    echo "上記のビルドエラーを確認し、修正してから再実行してください。" >&2
+    echo "$(t "=== 失敗: swift buildに失敗しました ===" "=== Failed: swift build failed ===")" >&2
+    echo "$(t "上記のビルドエラーを確認し、修正してから再実行してください。" "Review and fix the build errors above, then retry.")" >&2
     exit 3
   fi
   BIN_PATH=".build/release/ItJustTalks"
 else
-  echo "=== swift build (debug) ==="
+  echo "$(t "=== swift build (debug) ===" "=== swift build (debug) ===")"
   if ! swift build; then
-    echo "=== 失敗: swift buildに失敗しました ===" >&2
-    echo "上記のビルドエラーを確認し、修正してから再実行してください。" >&2
+    echo "$(t "=== 失敗: swift buildに失敗しました ===" "=== Failed: swift build failed ===")" >&2
+    echo "$(t "上記のビルドエラーを確認し、修正してから再実行してください。" "Review and fix the build errors above, then retry.")" >&2
     exit 3
   fi
   BIN_PATH=".build/debug/ItJustTalks"
@@ -152,8 +166,8 @@ BRANDING_ICONSET_DIR="$BRANDING_DIR/ItJustTalks.iconset"
 BRANDING_MENU_TEMPLATE="$BRANDING_DIR/ItJustTalksMenuBarTemplate.pdf"
 if [[ "$CONFIGURATION" == "debug" || "$CONFIGURATION" == "release" ]]; then
   [[ -d "$BRANDING_ICONSET_DIR" ]] || {
-    echo "エラー: Dockアイコンのiconsetが見つかりません: $BRANDING_ICONSET_DIR" >&2
-    echo "=== 失敗: 前提条件が満たされていません ===" >&2
+    echo "$(t "エラー: Dockアイコンのiconsetが見つかりません: $BRANDING_ICONSET_DIR" "Error: Dock icon iconset was not found: $BRANDING_ICONSET_DIR")" >&2
+    echo "$(t "=== 失敗: 前提条件が満たされていません ===" "=== Failed: Prerequisites are not met ===")" >&2
     exit 2
   }
   for icon_name in \
@@ -168,19 +182,19 @@ if [[ "$CONFIGURATION" == "debug" || "$CONFIGURATION" == "release" ]]; then
     icon_512x512.png \
     icon_512x512@2x.png; do
     [[ -f "$BRANDING_ICONSET_DIR/$icon_name" ]] || {
-      echo "エラー: Dockアイコンの必須サイズが見つかりません: $BRANDING_ICONSET_DIR/$icon_name" >&2
-      echo "=== 失敗: 前提条件が満たされていません ===" >&2
+      echo "$(t "エラー: Dockアイコンの必須サイズが見つかりません: $BRANDING_ICONSET_DIR/$icon_name" "Error: A required Dock icon size is missing: $BRANDING_ICONSET_DIR/$icon_name")" >&2
+      echo "$(t "=== 失敗: 前提条件が満たされていません ===" "=== Failed: Prerequisites are not met ===")" >&2
       exit 2
     }
   done
   [[ -f "$BRANDING_MENU_TEMPLATE" ]] || {
-    echo "エラー: メニューバー用テンプレートPDFが見つかりません: $BRANDING_MENU_TEMPLATE" >&2
-    echo "=== 失敗: 前提条件が満たされていません ===" >&2
+    echo "$(t "エラー: メニューバー用テンプレートPDFが見つかりません: $BRANDING_MENU_TEMPLATE" "Error: Menu bar template PDF was not found: $BRANDING_MENU_TEMPLATE")" >&2
+    echo "$(t "=== 失敗: 前提条件が満たされていません ===" "=== Failed: Prerequisites are not met ===")" >&2
     exit 2
   }
   command -v iconutil >/dev/null 2>&1 || {
-    echo "エラー: macOSのiconutilが見つからないため、Dockアイコンを生成できません。" >&2
-    echo "=== 失敗: 前提条件が満たされていません ===" >&2
+    echo "$(t "エラー: macOSのiconutilが見つからないため、Dockアイコンを生成できません。" "Error: Cannot generate the Dock icon because macOS iconutil was not found.")" >&2
+    echo "$(t "=== 失敗: 前提条件が満たされていません ===" "=== Failed: Prerequisites are not met ===")" >&2
     exit 2
   }
 fi
@@ -188,8 +202,8 @@ fi
 TARGET_APP_DIR="$ROOT_DIR/dist/$APP_NAME"
 if [[ -n "$PREVIOUS_APP_PATH" ]]; then
   [[ -d "$PREVIOUS_APP_PATH" ]] || {
-    echo "エラー: 更新前のアプリが見つかりません: $PREVIOUS_APP_PATH" >&2
-    echo "=== 失敗: 前提条件が満たされていません ===" >&2
+    echo "$(t "エラー: 更新前のアプリが見つかりません: $PREVIOUS_APP_PATH" "Error: The previous app was not found: $PREVIOUS_APP_PATH")" >&2
+    echo "$(t "=== 失敗: 前提条件が満たされていません ===" "=== Failed: Prerequisites are not met ===")" >&2
     exit 2
   }
   PREVIOUS_APP_PATH="$(cd "$PREVIOUS_APP_PATH" && pwd -P)"
@@ -202,19 +216,20 @@ if [[ -d "$TARGET_APP_DIR" ]]; then
   if [[ -n "$target_signer" ]]; then
     target_signer="$(printf '%s' "$target_signer" | tr '[:lower:]' '[:upper:]')"
     if [[ "$target_signer" != "$SIGN_IDENTITY" ]]; then
-      cat >&2 <<EOF
-エラー: 既存の$(basename "$TARGET_APP_DIR")は別の安定署名で作成されています。
+      printf '%s\n' "$(t "エラー: 既存の$(basename "$TARGET_APP_DIR")は別の安定署名で作成されています。
 
 現在の.appを上書きするとmacOS権限が継続しない可能性があるため、ビルドを中止しました。
-署名移行の影響を確認してから、明示的な移行手順で作業してください。
-EOF
-      echo "=== 失敗: 署名または配置に失敗しました ===" >&2
+署名移行の影響を確認してから、明示的な移行手順で作業してください。" "Error: The existing $(basename "$TARGET_APP_DIR") was created with a different stable signature.
+
+The build was stopped because overwriting the current app may interrupt macOS permissions.
+Review the impact of changing signatures, then follow an explicit migration procedure.")" >&2
+      echo "$(t "=== 失敗: 署名または配置に失敗しました ===" "=== Failed: Signing or placement failed ===")" >&2
       exit 4
     fi
     TARGET_APP_IS_STABLE=true
   else
-    echo "注意: 既存の$(basename "$TARGET_APP_DIR")は安定署名として検証できません。" >&2
-    echo "      不安定署名版からの初回移行では、macOSで一度だけ権限の再許可が必要になる場合があります。" >&2
+    echo "$(t "注意: 既存の$(basename "$TARGET_APP_DIR")は安定署名として検証できません。" "Warning: The existing $(basename "$TARGET_APP_DIR") could not be verified as having a stable signature.")" >&2
+    echo "$(t "      不安定署名版からの初回移行では、macOSで一度だけ権限の再許可が必要になる場合があります。" "      When migrating from an unstable signature, macOS may require permissions to be granted again once.")" >&2
   fi
 fi
 
@@ -223,19 +238,20 @@ if [[ -n "$PREVIOUS_APP_PATH" && "$PREVIOUS_APP_PATH" != "$TARGET_APP_DIR" ]]; t
   if [[ -n "$external_signer" ]]; then
     external_signer="$(printf '%s' "$external_signer" | tr '[:lower:]' '[:upper:]')"
     if [[ "$external_signer" != "$SIGN_IDENTITY" ]]; then
-      cat >&2 <<EOF
-エラー: --previous-appで指定した更新前アプリは別の安定署名で作成されています。
+      printf '%s\n' "$(t "エラー: --previous-appで指定した更新前アプリは別の安定署名で作成されています。
 
 macOS権限が継続しない可能性があるため、ビルドを中止しました。署名移行の影響を
-確認してから、明示的な移行手順で作業してください。
-EOF
-      echo "=== 失敗: 署名または配置に失敗しました ===" >&2
+確認してから、明示的な移行手順で作業してください。" "Error: The previous app specified by --previous-app has a different stable signature.
+
+The build was stopped because macOS permissions may not carry over. Review the impact
+of changing signatures, then follow an explicit migration procedure.")" >&2
+      echo "$(t "=== 失敗: 署名または配置に失敗しました ===" "=== Failed: Signing or placement failed ===")" >&2
       exit 4
     fi
     EXTERNAL_REFERENCE_IS_STABLE=true
   else
-    echo "注意: --previous-appで指定したアプリは安定署名として検証できません。" >&2
-    echo "      不安定署名版からの初回移行では、macOSで一度だけ権限の再許可が必要になる場合があります。" >&2
+    echo "$(t "注意: --previous-appで指定したアプリは安定署名として検証できません。" "Warning: The app specified by --previous-app could not be verified as having a stable signature.")" >&2
+    echo "$(t "      不安定署名版からの初回移行では、macOSで一度だけ権限の再許可が必要になる場合があります。" "      When migrating from an unstable signature, macOS may require permissions to be granted again once.")" >&2
   fi
 fi
 
@@ -251,7 +267,7 @@ cleanup_staging() {
   if [[ "${REPLACEMENT_COMMITTED:-false}" != true &&
         -n "${PREVIOUS_TARGET_BACKUP:-}" &&
         -d "$PREVIOUS_TARGET_BACKUP" ]]; then
-    echo "エラー: 既存アプリの退避コピーを保持しました: $PREVIOUS_TARGET_BACKUP" >&2
+    echo "$(t "エラー: 既存アプリの退避コピーを保持しました: $PREVIOUS_TARGET_BACKUP" "Error: A backup of the existing app has been retained: $PREVIOUS_TARGET_BACKUP")" >&2
     return 0
   fi
   if [[ -n "${STAGING_DIRECTORY:-}" && -d "$STAGING_DIRECTORY" ]]; then
@@ -261,7 +277,7 @@ cleanup_staging() {
 }
 trap cleanup_staging EXIT
 
-echo "=== .appバンドルを検証用ステージングへ組み立て ==="
+echo "$(t "=== .appバンドルを検証用ステージングへ組み立て ===" "=== Assembling the .app bundle in staging for verification ===")"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 
 # 起動時ログで、更新直後の挙動を実際に起動した成果物と対応付けられるようにする。
@@ -285,7 +301,7 @@ for localization in "$ROOT_DIR"/Sources/ItJustTalks/Resources/*.lproj; do
 done
 
 if [[ "$CONFIGURATION" == "debug" || "$CONFIGURATION" == "release" ]]; then
-  echo "=== Dock・メニューバー用アセットを同梱 ==="
+  echo "$(t "=== Dock・メニューバー用アセットを同梱 ===" "=== Including Dock and menu bar assets ===")"
   iconutil -c icns "$BRANDING_ICONSET_DIR" -o "$RESOURCES_DIR/ItJustTalks.icns"
   cp "$BRANDING_MENU_TEMPLATE" "$RESOURCES_DIR/ItJustTalksMenuBarTemplate.pdf"
 fi
@@ -333,16 +349,16 @@ PLIST
 xattr -cr "$APP_DIR"
 
 if ! codesign --force --sign "$SIGN_IDENTITY" "$APP_DIR"; then
-  echo "=== 失敗: コード署名に失敗しました ===" >&2
-  echo "証明書やkeychainの状態を確認し、必要であれば bash scripts/make_signing_cert.sh を再実行してください。" >&2
+  echo "$(t "=== 失敗: コード署名に失敗しました ===" "=== Failed: Code signing failed ===")" >&2
+  echo "$(t "証明書やkeychainの状態を確認し、必要であれば bash scripts/make_signing_cert.sh を再実行してください。" "Check the certificate and Keychain, and rerun bash scripts/make_signing_cert.sh if needed.")" >&2
   exit 4
 fi
 
-echo "=== 署名検証 ==="
+echo "$(t "=== 署名検証 ===" "=== Verifying the signature ===")"
 verify_or_fail() {
   if ! bash "$ROOT_DIR/scripts/verify_app_identity.sh" "$@"; then
-    echo "=== 失敗: 署名または配置に失敗しました ===" >&2
-    echo "組み立てたアプリの署名を検証できませんでした。既存のアプリは置き換えていません。" >&2
+    echo "$(t "=== 失敗: 署名または配置に失敗しました ===" "=== Failed: Signing or placement failed ===")" >&2
+    echo "$(t "組み立てたアプリの署名を検証できませんでした。既存のアプリは置き換えていません。" "Could not verify the assembled app signature. The existing app has not been replaced.")" >&2
     exit 4
   fi
 }
@@ -361,25 +377,25 @@ fi
 if ! mv "$APP_DIR" "$TARGET_APP_DIR"; then
   if [[ -n "$PREVIOUS_TARGET_BACKUP" && -d "$PREVIOUS_TARGET_BACKUP" ]]; then
     if [[ -e "$TARGET_APP_DIR" || -L "$TARGET_APP_DIR" ]]; then
-      echo "エラー: 配置失敗後に出力先が存在するため、安全に復元できません。退避コピーを保持しています: $PREVIOUS_TARGET_BACKUP" >&2
-      echo "=== 失敗: 署名または配置に失敗しました ===" >&2
+      echo "$(t "エラー: 配置失敗後に出力先が存在するため、安全に復元できません。退避コピーを保持しています: $PREVIOUS_TARGET_BACKUP" "Error: The destination exists after placement failed; safe restoration is not possible. Backup retained: $PREVIOUS_TARGET_BACKUP")" >&2
+      echo "$(t "=== 失敗: 署名または配置に失敗しました ===" "=== Failed: Signing or placement failed ===")" >&2
       exit 4
     fi
     if mv "$PREVIOUS_TARGET_BACKUP" "$TARGET_APP_DIR"; then
       PREVIOUS_TARGET_BACKUP=""
     else
-      echo "エラー: 既存アプリの復元に失敗しました。退避コピーを保持しています: $PREVIOUS_TARGET_BACKUP" >&2
-      echo "=== 失敗: 署名または配置に失敗しました ===" >&2
+      echo "$(t "エラー: 既存アプリの復元に失敗しました。退避コピーを保持しています: $PREVIOUS_TARGET_BACKUP" "Error: Could not restore the existing app. Backup retained: $PREVIOUS_TARGET_BACKUP")" >&2
+      echo "$(t "=== 失敗: 署名または配置に失敗しました ===" "=== Failed: Signing or placement failed ===")" >&2
       exit 4
     fi
   fi
-  echo "エラー: 検証済みアプリを配置できませんでした。既存アプリを復元しました。" >&2
-  echo "=== 失敗: 署名または配置に失敗しました ===" >&2
+  echo "$(t "エラー: 検証済みアプリを配置できませんでした。既存アプリを復元しました。" "Error: Could not place the verified app. The existing app has been restored.")" >&2
+  echo "$(t "=== 失敗: 署名または配置に失敗しました ===" "=== Failed: Signing or placement failed ===")" >&2
   exit 4
 fi
 if [[ ! -d "$TARGET_APP_DIR" ]]; then
-  echo "エラー: 検証済みアプリの配置を確認できませんでした。" >&2
-  echo "=== 失敗: 署名または配置に失敗しました ===" >&2
+  echo "$(t "エラー: 検証済みアプリの配置を確認できませんでした。" "Error: Could not confirm placement of the verified app.")" >&2
+  echo "$(t "=== 失敗: 署名または配置に失敗しました ===" "=== Failed: Signing or placement failed ===")" >&2
   exit 4
 fi
 if [[ -n "$PREVIOUS_TARGET_BACKUP" ]]; then
@@ -391,7 +407,7 @@ REPLACEMENT_COMMITTED=true
 if [[ -z "$PINNED_SIGN_IDENTITY" ]]; then
   umask 077
   printf '%s\n' "$SIGN_IDENTITY" > "$IDENTITY_STATE_FILE"
-  echo "=== 署名IDをこのMacのItJustTalksビルド用に固定しました ==="
+  echo "$(t "=== 署名IDをこのMacのItJustTalksビルド用に固定しました ===" "=== Saved the signing identity for ItJustTalks builds on this Mac ===")"
 fi
 
-echo "=== 完了: $TARGET_APP_DIR ==="
+echo "$(t "=== 完了: $TARGET_APP_DIR ===" "=== Complete: $TARGET_APP_DIR ===")"

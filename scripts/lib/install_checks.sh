@@ -1,14 +1,17 @@
 #!/bin/bash
+# Output language follows ITJUSTTALKS_LANG (ja/en) or the locale.
 # Shared, read-only probes for the local installation scripts.
 
 itjusttalks_keychain_state() {
   local output status
-  output="$(security find-identity -v -p codesigning 2>&1)"; status=$?
+  if output="$(security find-identity -v -p codesigning 2>&1)"; then status=0; else status=$?; fi
   ITJUSTTALKS_KEYCHAIN_OUTPUT="$output"
   if [[ $status -ne 0 ]]; then
     printf '%s\n' inaccessible
   elif [[ "$output" == *'"ItJustTalks Dev"'* ]]; then
     printf '%s\n' found
+  elif security find-certificate -c "ItJustTalks Dev" "$HOME/Library/Keychains/login.keychain-db" >/dev/null 2>&1; then
+    printf '%s\n' untrusted
   else
     printf '%s\n' absent
   fi

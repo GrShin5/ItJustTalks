@@ -24,7 +24,9 @@ bash scripts/make_app.sh debug
 ```
 
 The app bundle is `dist/ItJustTalks.app`. Use `release` instead of `debug`
-for distribution. A stable local signing certificate is required; read
+for distribution. A debug build is written to the same path with the same
+bundle identifier, so rebuild with `release` before running
+`scripts/install_app.sh`. A stable local signing certificate is required; read
 [Appendix B](docs/manual/en.md#appendix-b) before running
 `scripts/make_signing_cert.sh`. Reuse the same identity for updates.
 
@@ -45,6 +47,15 @@ report skips separately from passes. Real microphone, permissions, hotkey,
 and insertion checks still need a person using the app. Use synthetic data
 for model evaluation and testing; never submit real speech, mail, clipboard,
 dictionary, or custom instruction contents in logs or reports.
+
+### Developer measurement tools
+
+`swift build` also builds two developer tools that are not part of the app:
+`afm-eval` (runs the synthetic cases in `Evaluation/`) and
+`AFMBackgroundProbe` (`Tools/AFMBackgroundProbe`, measures on-device model
+behavior while running in the background; build it as an app with
+`scripts/dev/make_probe_app.sh` and run it with `scripts/dev/run_probe.sh`).
+They use only synthetic input and are not needed to use ItJustTalks.
 
 ## Continuous integration
 

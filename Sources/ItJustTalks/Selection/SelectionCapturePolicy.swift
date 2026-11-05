@@ -24,8 +24,8 @@ enum SelectionCapturePolicy {
 
     /// - Parameter bundleIdentifier: **Deliberately unused.** The self-selection guard
     ///   formerly branched on it to block AI-command on text
-    ///   selected in ItJustTalks's own Settings window. The user reviewed the privacy
-    ///   trade-off and asked for that to be reverted (2026-07-30), so our own windows
+    ///   selected in ItJustTalks's own Settings window. It was deliberately removed after
+    ///   weighing the privacy trade-off, so our own windows
     ///   are now treated like any other app's. The parameter is kept so the regression
     ///   suite can assert that ItJustTalks bundle IDs produce identical decisions to a
     ///   third-party one — that assertion is what stops the guard being reintroduced

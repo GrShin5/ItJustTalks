@@ -1457,7 +1457,7 @@ enum RegressionTestSuite {
             "settings display-scale migration expands legacy standard and preserves explicit scales"
         )
         expect(
-            // 自己選択ガードは差し戻した（2026-07-30のユーザー判断）。
+            // 自己選択ガードは、プライバシー上の得失を比べて意図的に外した。
             // ItJustTalks自身のウィンドウも他アプリと同じ判定になることを固定して、
             // ガードが黙って再導入されないようにする。
             SelectionCapturePolicy.decision(

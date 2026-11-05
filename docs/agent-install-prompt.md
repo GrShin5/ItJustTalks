@@ -2,6 +2,8 @@
 
 配布元を確認し、下のコードブロック全体を、Macのローカルフォルダとコマンドを扱えるAIコーディングエージェントへ貼り付けてください。個人データの添付は不要です。作業を助けるエージェント自身の通信は、アプリのローカルAI処理とは別です。
 
+英語版は[agent-install-prompt.en.md](agent-install-prompt.en.md)です（内容は同じ）。
+
 ```text
 このMacへItJustTalks 0.1.0をソースからビルド・自己署名して新規導入してください。
 取得元: https://github.com/GrShin5/ItJustTalks
@@ -24,4 +26,6 @@
 6. bash scripts/preflight.sh --install の成功後、bash scripts/install_app.sh を実行してください。既存のItJustTalks.appや同名項目がある場合は上書きせず、更新用プロンプトへ案内して停止してください。
 7. 配置されたアプリを特定してverify_app_identity.shで検証し、ビルド版との一致を確認してください。作成物、配置場所、版、検証結果、未実施事項を短く報告してください。
 8. ユーザーにFinderからの起動、マイク・音声認識・アクセシビリティの許可、Apple Intelligenceの状態確認、短い合成文でのキーと入力確認を案内してください。ビルド成功を実機合格と呼ばないでください。
+
+スクリプトの表示言語は環境変数ITJUSTTALKS_LANG（jaまたはen）、なければロケールに従い、ロケールが未設定・C・POSIXなら日本語です。ユーザーが英語を読む場合は、スクリプトの前にITJUSTTALKS_LANG=enを付けてください。
 ```

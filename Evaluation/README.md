@@ -14,6 +14,11 @@ Evaluation/
   cases/long.jsonl          19  long transcripts / long selections - generated
   validate_cases.py             schema + coverage validator
   generate_long_cases.py        deterministic generator for long.jsonl
+  holdout/, holdout2/, holdout3/, holdout4/   held-out sets for independent checks
+  accuracy/cleanup.jsonl        accuracy profile (dictionary spellings and corrections)
+  fidelity/cleanup.jsonl        fidelity profile (punctuation and wording preservation)
+  normal-loop/cleanup.jsonl     additional standard-dictation cleanup cases
+  tests/                        offline tests for the evaluation tools
 ```
 
 The default set has 218 cases (216 existing cases plus OP-021/022 for both optimizer modes).
@@ -142,9 +147,7 @@ Each run writes `manifest.json` separately from `records.jsonl`: OS, per-file SH
 SHA-256 over sorted file names and hashes. Case files include dictionary and custom instructions.
 Provide `AFM_EVAL_APP_VERSION`, `AFM_EVAL_SOURCE_REVISION` (full hex revision), and
 `AFM_EVAL_SDK_VERSION` at launch; missing or invalid provenance is explicitly `unavailable`.
-The revision identifies source only when the parent also verifies a clean checkout.
+The revision identifies source only when the caller also verifies a clean checkout.
 
 Validate the accuracy profile with `python3 -I Evaluation/validate_cases.py --accuracy`.
-Independent sets are checked for exact cross-set input duplicates. H2R-029 replaces the former
-RT-021 duplicate with an unused missing-target translation case; old holdout2 results containing
-that duplicate must exclude H2R-029 from independent holdout totals.
+Independent sets are checked for exact cross-set input duplicates.

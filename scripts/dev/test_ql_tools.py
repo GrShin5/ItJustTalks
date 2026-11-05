@@ -131,11 +131,50 @@ class ScriptTests(unittest.TestCase):
             fake.write_text('#!/bin/sh\ntouch "$SECURITY_MARKER"\nexit 1\n')
             fake.chmod(0o755)
             result = subprocess.run(['bash', str(ROOT / 'scripts/make_signing_cert.sh'), '--interactive-help'],
-                                    env={**os.environ, 'PATH': tmp + ':' + os.environ['PATH'], 'SECURITY_MARKER': str(marker)}, capture_output=True)
+                                    env={**os.environ, 'PATH': tmp + ':' + os.environ['PATH'], 'SECURITY_MARKER': str(marker), 'ITJUSTTALKS_LANG': 'ja'}, capture_output=True)
             self.assertEqual(result.returncode, 0)
             self.assertFalse(marker.exists())
-            self.assertIn('既存証明書の信頼修復'.encode(), result.stdout)
+            self.assertEqual(result.stdout, '=== 既存証明書の信頼修復 ===\n「キーチェーンアクセス.app」で「ログイン」の "ItJustTalks Dev" を検索し、ダブルクリック。\n「信頼」を展開し「コード署名」を「常に信頼」に変更し、macOSの認証を完了してください。\n既存証明書がある場合は新しく作成しないでください。crtファイルは不要です。\n\n=== 証明書がない場合の手動作成手順 ===\n1. 「キーチェーンアクセス.app」を開く\n2. メニューバー: キーチェーンアクセス → 証明書アシスタント → 証明書を作成...\n3. 名前: "ItJustTalks Dev"\n4. identity種類: 自己署名ルート\n5. 証明書の種類: コード署名\n6. 「デフォルトを上書き」にチェックし、鍵ペア用途を「このアイテムのデフォルトを常に使用」から\n   コード署名を確実に含める設定にして作成\n7. 作成後、「ログイン」キーチェーンに保存されていることを確認\n8. ターミナルで `security find-identity -v -p codesigning` を実行し、\n   "ItJustTalks Dev" が一覧に出ることを確認する\n\n作成後、このスクリプトを再実行すればハッシュが表示されます。\n'.encode())
+            self.assertEqual(result.stderr, b'')
+            result = subprocess.run(['bash', str(ROOT / 'scripts/make_signing_cert.sh'), '--interactive-help'],
+                                    env={**os.environ, 'PATH': tmp + ':' + os.environ['PATH'],
+                                         'SECURITY_MARKER': str(marker), 'ITJUSTTALKS_LANG': 'en'}, capture_output=True)
+            self.assertEqual(result.returncode, 0)
+            self.assertFalse(marker.exists())
+            self.assertIn(b'Repair trust for an existing certificate', result.stdout)
+            self.assertIn(b'Manually create a certificate', result.stdout)
+            self.assertFalse(any(ord(c) > 127 and c != '→' for c in result.stdout.decode()))
+            self.assertEqual(result.stderr, b'')
 
+
+    def run_make_app_identity_check(self, identities, lang):
+        # Copy only make_app.sh and its language helper (no preflight), fake 'security'.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'scripts/lib').mkdir(parents=True)
+            (root / 'scripts/make_app.sh').write_text((ROOT / 'scripts/make_app.sh').read_text())
+            (root / 'scripts/lib/ui_lang.sh').write_text((ROOT / 'scripts/lib/ui_lang.sh').read_text())
+            bindir = root / 'bin'
+            bindir.mkdir()
+            fake = bindir / 'security'
+            fake.write_text('#!/bin/sh\nprintf "%s" "$FAKE_IDENTITIES"\n')
+            fake.chmod(0o755)
+            env = {**os.environ, 'PATH': str(bindir) + ':' + os.environ['PATH'],
+                   'FAKE_IDENTITIES': identities, 'ITJUSTTALKS_LANG': lang}
+            return subprocess.run(['bash', str(root / 'scripts/make_app.sh'), 'release'],
+                                  env=env, capture_output=True, text=True)
+
+    def test_make_app_identity_errors_keep_full_messages(self):
+        two = ''.join(f'  {i}) {c * 40} "ItJustTalks Dev"\n' for i, c in ((1, 'A'), (2, 'B')))
+        cases = [('', 'ja', 'エラー: 安定したコード署名アイデンティティ "ItJustTalks Dev" が見つかりません。', 'bash scripts/make_signing_cert.sh --interactive-help'),
+                 ('', 'en', 'Error: A stable code-signing identity named "ItJustTalks Dev" was not found.', 'bash scripts/make_signing_cert.sh --interactive-help'),
+                 (two, 'ja', 'エラー: "ItJustTalks Dev" と同名の有効なコード署名アイデンティティが複数あります。', 'もう一度実行してください。'),
+                 (two, 'en', 'Error: More than one valid code-signing identity is named "ItJustTalks Dev".', 'then retry.')]
+        for identities, lang, first, last in cases:
+            result = self.run_make_app_identity_check(identities, lang)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn(first, result.stderr)
+            self.assertIn(last, result.stderr)
 
 if __name__ == '__main__':
     unittest.main()

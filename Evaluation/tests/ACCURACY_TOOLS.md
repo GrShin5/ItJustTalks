@@ -1,0 +1,31 @@
+# Accuracy evaluation contracts (stage 0)
+
+No model calls are made by `rescore`, comparison, or the contract tests. Live suite execution is a separate action.
+
+- `python3 scripts/dev/afm_eval_suite.py run --repo <checkout> --binary <afm-eval> --build-revision <full actual build SHA> --baseline-product-revision <baseline product commit> --out <new external directory> --repeat 3` runs the fixed 12 development suites: cases (5 categories), holdout (cleanup/routing), holdout2 (cleanup/routing), holdout3 cleanup, fidelity cleanup, accuracy cleanup. All inputs are preflighted. Each process must exit zero and produce exactly the expected record keys, without duplicate keys or unexpected outputs. Missing output text is allowed only for an explicitly recorded failed execution with a failing judge; that entry remains in the fixed denominator. Critical cases alone repeat, matching afm-eval. A process or collection failure stops immediately; recorded model failures remain failed cases and the remaining suites continue; `EVAL_DONE` appears only after all suites verify. Logs and `suite-audit.json` remain in the external output directory.
+- `--include-generation-e2e` adds `cases-generation-e2e`, separate from the 12 baseline suites. `--include-holdout4` explicitly opts into its four required categories (cleanup/routing/generation/optimization); a missing category fails preflight. The default never opens that directory.
+- `afm-eval --cases <dir> --out <external dir> --category generation --generation-path oracle|e2e`: oracle uses the labelled task with `CommandPipeline.generate`; e2e runs the real `CommandPipeline.run` including classification and deterministic routing. Both paths use the same content judge; e2e additionally checks the predicted task. Neither performs app insertion or sending. `--fake` exercises plumbing only.
+- `afm-eval rescore --records-dir <producer output dir> --cases <case dir> --out <new external dir> --category all --repeat 3` scores the entire expected case/run grid, including missing/failed outputs. Use the original repeat setting; unknown IDs/runs, duplicate keys, and `--limit` fail. Category-specific inputs must contain only that category. The historical `rescoreCleanup` Swift helper remains a cleanup-only wrapper. `rescore.json` contains code-only results and fixed denominator counts. A missing outputs file counts every expected entry as a failure.
+- `python3 scripts/dev/afm_eval_suite.py compare <base> <new>` compares records (or `rescore.json` when present) by suite directory, category, ID, and run. Keep the same suite directory names. Missing/added entries, duplicates, pass regressions, new failed checks, adverse validator transitions, or generation-path mismatches return nonzero. Validator transitions are all reported; unknown status is treated as adverse from a known state. A failed judgment promoted from needsReview/failed to complete is also adverse.
+
+## Portable outputs / reference-app mapping
+
+Each `outputs.jsonl` line contains `id`, integer `run`, `category`, and `text`. Optional metadata: `outcome`, `failureCode`, `validator: {status,reasons}`, `routing` (the `RoutingRecord` fields), `permissionFlaggedIndices`, `items` (exact optimization item boundaries), and `generationPath: oracle|e2e`. Routing safety booleans may be null when unobserved. Preserve unknowns rather than asserting false. For older afm-eval runs, `records.jsonl` supplies metadata including its authoritative generation path; contradictory generation paths in the two files fail closed; an authoritative failure there cannot be overridden by output text. Failed outcomes, failure codes, and validator `failed` never pass live or rescored judging. `needsReview` is reported separately and may still meet content checks.
+
+| Portable field | Required afm-eval label / representation |
+| --- | --- |
+| category | cleanup, routing, generation, optimization, long |
+| routing.predictedIntent | automatic, show_result, insert_at_target |
+| routing.predictedTaskType | classified task raw value, e.g. transform, proofread_rewrite, answer_question; null if unavailable |
+| routing.predictedKind | content, answer, clarification, refusal, requires_web |
+| validator.status | complete, needsReview, failed; omitted if unavailable |
+| outcome | ok/complete/needsReview for delivered results; failure for refusal/error/timeout without a valid result |
+| generationPath | oracle for a forced labelled task; e2e for instruction through classification |
+
+Producer-specific labels must be mapped explicitly in that producer's report. Missing task metadata cannot pass strict routing/e2e task checks. Content failed checks remain independently visible in the same record; absence of a reference-app task classifier is a comparison limitation, not a successful classification. Long output needs its actual outcome. Optimization permission checks need actual flags, and exact `items` should be supplied; legacy text-only records use newline boundaries and may not reproduce embedded-newline items exactly.
+
+`noAnswer` is a deterministic contamination check: newly introduced answer/assistant framing or a source question changed to a nonquestion fails. Framing is counted separately by phrase family anywhere in the source: already dictated phrasing remains permitted after filler removal, while extra occurrences or a newly added family fail. This catches explicit answer substitution/addition but is not a semantic oracle; implicit answers, question paraphrases, and quoted questions still require blinded human/model review.
+
+Manifests use schema 2 and `accuracy-shared-fixed-grid-v2` for live/rescore. `AFM_EVAL_SOURCE_REVISION` is the actual full binary build commit, `AFM_EVAL_TOOL_REVISION` the scoring tool commit, and `AFM_EVAL_BASELINE_PRODUCT_REVISION` the independently verified product baseline (a required runner argument). The runner requires the caller to state the build commit; it does not prove that an arbitrary binary came from it. Missing metadata stays `unavailable`. Rescoring captures current scoring provenance, not the old producer's unavailable build facts; retain its original manifest alongside results.
+
+Verification: `bash scripts/dev/test_afm_eval_contracts.sh --jobs 4` and `python3 -m unittest discover -s Evaluation/tests -p test_accuracy_tools.py`.

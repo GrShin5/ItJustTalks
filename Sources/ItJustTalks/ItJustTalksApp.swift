@@ -1,0 +1,4645 @@
+import SwiftUI
+import AppKit
+import AVFoundation
+import Combine
+import Carbon.HIToolbox
+import CoreServices
+
+struct AICommandFailureOwnership {
+    private(set) var ownerID: UUID?
+
+    var isPresented: Bool { ownerID != nil }
+
+    mutating func present(ownerID: UUID) {
+        self.ownerID = ownerID
+    }
+
+    func isOwned(by ownerID: UUID) -> Bool {
+        self.ownerID == ownerID
+    }
+
+    mutating func clear() {
+        ownerID = nil
+    }
+}
+
+extension Notification.Name {
+    static let itJustTalksOpenSettings = Notification.Name("ItJustTalks.openSettings")
+    static let itJustTalksOpenDictionaryRecovery = Notification.Name("ItJustTalks.openDictionaryRecovery")
+    static let itJustTalksOpenHistoryStorage = Notification.Name("ItJustTalks.openHistoryStorage")
+}
+
+/// Dockの再オープン時に、可視ウィンドウとセットアップ状態から表示先を決める。
+enum DockLifecyclePolicy {
+    enum ReopenDestination: Equatable {
+        case unchanged
+        case onboarding
+        case settings
+    }
+
+    static func reopenDestination(
+        isDebug: Bool,
+        hasVisibleWindows: Bool,
+        allPermissionsGranted: Bool,
+        setupIsComplete: Bool
+    ) -> ReopenDestination {
+        if isDebug {
+            return hasVisibleWindows ? .unchanged : .settings
+        }
+        return allPermissionsGranted && setupIsComplete ? .settings : .onboarding
+    }
+
+    static func keepsRunningAfterLastWindowClosed(isDebug: Bool) -> Bool {
+        !isDebug
+    }
+}
+
+/// Debug.appの起動時に、実際に表示する再開画面とランチャーを重ねないための規則。
+enum DebugMainWindowLaunchPolicy {
+    static func presentsRestartIntent(
+        isDebug: Bool,
+        mode: OnboardingPresentationMode?
+    ) -> Bool {
+        guard let mode else { return false }
+        return isDebug && mode.isDebug && OnboardingRestartPresentationPolicy.presents(mode)
+    }
+
+    static func opensAutomatically(
+        isDebug: Bool,
+        restartPresentationMode: OnboardingPresentationMode?
+    ) -> Bool {
+        isDebug && !presentsRestartIntent(isDebug: isDebug, mode: restartPresentationMode)
+    }
+
+    static func opensAfterRestartWindowClosed(
+        isDebug: Bool,
+        restartPresentationMode: OnboardingPresentationMode
+    ) -> Bool {
+        isDebug && restartPresentationMode.isDebug
+    }
+}
+
+enum DebugLaunchLogPolicy {
+    static func message(
+        restartIntent: OnboardingRestartIntent?,
+        forcedInitialStepApplied: Bool,
+        openedStepIndex: Int?
+    ) -> String {
+        let route = restartIntent?.route.rawValue ?? "none"
+        let step = restartIntent?.step.rawValue ?? "none"
+        let openedIndex = openedStepIndex.map(String.init) ?? "none"
+        return "[DebugLaunch] restartIntentFound=\(restartIntent != nil) route=\(route) step=\(step) forcedInitialStepApplied=\(forcedInitialStepApplied) openedStepIndex=\(openedIndex)"
+    }
+}
+
+/// 通常時だけ独自テンプレート画像を使い、既存状態アイコンはSF Symbolのままにする。
+enum MenuBarIconPolicy {
+    static func usesCustomTemplate(isDebug: Bool, systemImageName: String) -> Bool {
+        !isDebug && systemImageName == "mic"
+    }
+}
+
+private enum MenuBarBranding {
+    static func templateImage() -> NSImage? {
+        guard let url = Bundle.main.url(
+            forResource: "ItJustTalksMenuBarTemplate",
+            withExtension: "pdf"
+        ), let image = NSImage(contentsOf: url) else {
+            return nil
+        }
+
+        image.isTemplate = true
+        image.size = NSSize(width: 18, height: 18)
+        return image
+    }
+}
+
+private struct MenuBarStatusIcon: View {
+    let systemImageName: String
+
+    var body: some View {
+        if MenuBarIconPolicy.usesCustomTemplate(
+            isDebug: OnboardingRuntimeProfile.isDebug,
+            systemImageName: systemImageName
+        ), let image = MenuBarBranding.templateImage() {
+            Image(nsImage: image)
+                .renderingMode(.template)
+                .accessibilityLabel(Text("ItJustTalks"))
+        } else {
+            Image(systemName: systemImageName)
+        }
+    }
+}
+
+private struct SettingsWindowOpenBridge: View {
+    let opensDebugMainWindowAutomatically: Bool
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onAppear {
+                openDebugMainWindowIfNeeded()
+            }
+            .onChange(of: opensDebugMainWindowAutomatically) {
+                openDebugMainWindowIfNeeded()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .itJustTalksOpenSettings)) { _ in
+                openMainWindow()
+            }
+    }
+
+    private func openMainWindow() {
+        openWindow(id: "main-window")
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func openDebugMainWindowIfNeeded() {
+        // SwiftUIのWindow sceneは、MenuBarExtraだけで起動した場合に
+        // 自動生成されないことがある。再開画面を表示していない時だけ、
+        // Debugランチャーを要求する。
+        guard opensDebugMainWindowAutomatically else { return }
+        openMainWindow()
+    }
+}
+
+private struct MainWindowContent: View {
+    @ObservedObject var appDelegate: AppDelegate
+    @ObservedObject var debugPresentation: OnboardingDebugPresentationState
+
+    var body: some View {
+        if OnboardingRuntimeProfile.isOnboardingDebug {
+            OnboardingDebugLauncherView(settingsStore: appDelegate.settingsStore, presentation: debugPresentation)
+        } else {
+            SettingsView(
+                store: appDelegate.settingsStore,
+                appDelegate: appDelegate,
+                appState: appDelegate.appState,
+                historyStore: appDelegate.inputHistoryStore,
+                dictionaryStore: appDelegate.personalDictionaryStore,
+                customInstructionStateStore: appDelegate.customInstructionStateStore,
+                aiCommandCustomInstructionStateStore: appDelegate.aiCommandCustomInstructionStateStore
+            )
+        }
+    }
+}
+
+private struct MainMenuBarContent: View {
+    @ObservedObject var appDelegate: AppDelegate
+    @ObservedObject var settingsStore: SettingsStore
+    @Environment(\.openWindow) private var openWindow
+
+    private var uiLanguage: AppLanguage {
+        settingsStore.settings.languagePreferences.uiLanguage
+    }
+
+    var body: some View {
+        if OnboardingRuntimeProfile.isOnboardingDebug {
+            Button(AppLocalizer.text("初回セットアップ Debugを開く", language: uiLanguage)) {
+                openWindow(id: "main-window")
+                NSApp.activate(ignoringOtherApps: true)
+            }
+            Divider()
+            Button(AppLocalizer.text("Debug.appを終了", language: uiLanguage)) { NSApp.terminate(nil) }
+        } else {
+            MenuBarContentView(
+                appDelegate: appDelegate,
+                settingsStore: settingsStore,
+                permissionManager: appDelegate.permissionManager
+            )
+        }
+    }
+}
+
+private struct OnboardingDebugCommands: Commands {
+    @ObservedObject var presentation: OnboardingDebugPresentationState
+    @ObservedObject var settingsStore: SettingsStore
+    @FocusedValue(\.onboardingSimulateVoice) private var simulateVoice
+
+    var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            if OnboardingRuntimeProfile.isOnboardingDebug {
+                Button(AppLocalizer.text("Debugメニューへ戻る", language: settingsStore.settings.languagePreferences.uiLanguage)) {
+                    presentation.mode = nil
+                }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+                .disabled(presentation.mode?.isDebug != true)
+                Button(AppLocalizer.text("音声入力ありとして表示", language: settingsStore.settings.languagePreferences.uiLanguage)) {
+                    simulateVoice?()
+                }
+                .keyboardShortcut("v", modifiers: [.command, .shift])
+                .disabled(presentation.mode?.isPreview != true || simulateVoice == nil)
+            }
+        }
+    }
+}
+
+@main
+struct ItJustTalksApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    @StateObject private var debugPresentation = OnboardingDebugPresentationState()
+
+    init() {
+        Self.runEarlyCLITestIfRequested()
+    }
+
+    var body: some Scene {
+        MenuBarExtra {
+            MainMenuBarContent(appDelegate: appDelegate, settingsStore: appDelegate.settingsStore)
+        } label: {
+            MenuBarStatusIcon(
+                systemImageName: OnboardingRuntimeProfile.isDebug ? "ladybug.fill" : appDelegate.menuBarIconName
+            )
+                .background(SettingsWindowOpenBridge(
+                    opensDebugMainWindowAutomatically: appDelegate.opensDebugMainWindowAutomatically
+                ))
+        }
+
+        Window(mainWindowTitle, id: "main-window") {
+            MainWindowContent(appDelegate: appDelegate, debugPresentation: debugPresentation)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .commands {
+            OnboardingDebugCommands(presentation: debugPresentation, settingsStore: appDelegate.settingsStore)
+        }
+        .defaultSize(
+            width: OnboardingRuntimeProfile.isDebug
+                ? OnboardingUIScaleMetrics.defaultWindowSize.width
+                : SettingsUIScaleMetrics.defaultWindowSize.width,
+            height: OnboardingRuntimeProfile.isDebug
+                ? OnboardingUIScaleMetrics.defaultWindowSize.height
+                : SettingsUIScaleMetrics.defaultWindowSize.height
+        )
+    }
+
+    private var mainWindowTitle: String {
+        let language = appDelegate.settingsStore.settings.languagePreferences.uiLanguage
+        if OnboardingRuntimeProfile.isOnboardingDebug {
+            if debugPresentation.screenshotMode, let mode = debugPresentation.mode {
+                return mode.title(for: language, screenshotMode: debugPresentation.screenshotMode)
+            }
+            return AppLocalizer.text("ItJustTalks Debug", language: language)
+        }
+        return AppLocalizer.text("ItJustTalks 設定", language: language)
+    }
+
+    /// 自分自身のプロセスを除いて、同じバンドルIDのItJustTalksが既に起動中かを判定する。
+    private static func isAnotherItJustTalksInstanceRunning() -> Bool {
+        // `.build/debug/ItJustTalks` を直接叩く場合、実行ファイルはバンドルに入っていないので
+        // `Bundle.main.bundleIdentifier` は nil になる。ここで false を返すと、
+        // サポートコマンドの二重所有ガードが**そのCLI起動でだけ黙って無効**になり、
+        // 起動中のItJustTalks.appと同時にsettings.jsonを持ってしまう。READMEが案内するのは
+        // まさにこのbare binaryなので、既定の本番バンドルIDで判定する。
+        // Debugビルドは`isDebug`側で別途拒否されるため、ここで区別する必要はない。
+        let bundleIdentifier = Bundle.main.bundleIdentifier
+            ?? OnboardingRuntimeProfile.productionBundleIdentifier
+        let currentPID = ProcessInfo.processInfo.processIdentifier
+        return NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier)
+            .contains { $0.processIdentifier != currentPID }
+    }
+
+    private static func runEarlyCLITestIfRequested() {
+        let args = CommandLine.arguments
+        switch ScopedClipboardFallbackSupportCommand.parse(arguments: args) {
+        case .notRequested:
+            break
+        case .failure:
+            FileHandle.standardError.write(Data("support command failed\n".utf8))
+            exit(1)
+        case .success(let action):
+            guard !OnboardingRuntimeProfile.isDebug else {
+                FileHandle.standardError.write(Data("support command failed\n".utf8))
+                exit(1)
+            }
+            let result = ScopedClipboardFallbackSupportCommand.execute(
+                action: action,
+                isDebug: false,
+                settingsStore: SettingsStore(storageRootURL: OnboardingRuntimeProfile.storageRootURL),
+                isAnotherInstanceRunning: isAnotherItJustTalksInstanceRunning()
+            )
+            switch result {
+            case .success(let output):
+                print(output)
+            case .notRequested:
+                break
+            case .failure:
+                FileHandle.standardError.write(Data("support command failed\n".utf8))
+            }
+            exit(result.exitCode)
+        }
+
+        if args.contains("--test-regressions") {
+            // `--max-skips N` は「想定内のSKIP件数」の上限。CIが渡すことで、新しくSKIPされ
+            // 始めた検証だけが失敗になる。無指定ならSKIPは終了コードに影響しない。
+            var maxSkips: Int?
+            if let idx = args.firstIndex(of: "--max-skips") {
+                // 値の欠落やtypoで黙ってゲートが無効になると、CIは緑のまま守られなくなる。
+                // 門として使うフラグなので、解釈できなければ実行せずに落とす。
+                guard idx + 1 < args.count, let parsed = Int(args[idx + 1]) else {
+                    FileHandle.standardError.write(Data(
+                        "--max-skips には整数が必要です\n".utf8
+                    ))
+                    exit(2)
+                }
+                maxSkips = parsed
+            }
+            Task { @MainActor in
+                exit(await RegressionTestSuite.run(maxSkips: maxSkips))
+            }
+            RunLoop.main.run()
+        }
+
+        if let probeConfig = StreamingPartialProbe.parse(arguments: args) {
+            runEarlyStreamingPartialProbe(config: probeConfig)
+        }
+
+        // 整形の評価は `afm-eval` で行う。
+    }
+
+    /// 暫定結果の到着時刻だけを測るモード。AppDelegateの起動処理より前に実行し、
+    /// 設定・履歴・ログといった保存先へ触れずに終了する。
+    /// `RunLoop.main.run()` で待つのは、プローブ内でMainActorへホップする箇所
+    /// （HandsFreeSendSessionの再生）をデッドロックさせないため。
+    private static func runEarlyStreamingPartialProbe(config: StreamingPartialProbe.Config) -> Never {
+        Task.detached {
+            let exitCode = await StreamingPartialProbe.run(config: config)
+            exit(exitCode)
+        }
+        RunLoop.main.run()
+        exit(1)
+    }
+}
+
+struct MenuBarContentView: View {
+    @ObservedObject var appDelegate: AppDelegate
+    @ObservedObject var settingsStore: SettingsStore
+    @ObservedObject var permissionManager: PermissionManager
+    @Environment(\.openWindow) private var openWindow
+    @State private var microphones: [MicrophoneDevice] = []
+    @State private var defaultMicrophoneName = ""
+    @State private var languageProfileMessage: String?
+
+    private var uiLanguage: AppLanguage {
+        settingsStore.settings.languagePreferences.uiLanguage
+    }
+
+    var body: some View {
+        Group {
+        Text(appDelegate.appState.statusText(language: uiLanguage))
+        if settingsStore.saveBlockedStatus != nil {
+            Label(
+                AppLocalizer.text("設定を保存できません。詳しくは設定画面を確認してください。", language: uiLanguage),
+                systemImage: "exclamationmark.triangle"
+            )
+        }
+        if let dictationNotice = appDelegate.dictationNotice {
+            Label(dictationNotice, systemImage: "exclamationmark.triangle")
+        }
+        if let storageNotice = appDelegate.storageNotice {
+            Label(AppLocalizer.textOrLiteral(storageNotice, language: uiLanguage), systemImage: "externaldrive.badge.exclamationmark")
+            Button(AppLocalizer.text("ストレージの問題を確認", language: uiLanguage)) {
+                openWindow(id: "main-window")
+                NSApp.activate(ignoringOtherApps: true)
+                NotificationCenter.default.post(
+                    name: appDelegate.personalDictionaryStore.requiresRecovery ? .itJustTalksOpenDictionaryRecovery : .itJustTalksOpenHistoryStorage,
+                    object: nil
+                )
+            }
+        }
+        Divider()
+        Menu(AppLocalizer.text("マイクを選択", language: uiLanguage)) {
+            Button {
+                settingsStore.settings.preferredMicrophoneUID = ""
+            } label: {
+                microphoneMenuLabel(
+                    title: AppLocalizer.format("自動 (%@)", language: uiLanguage, defaultMicrophoneName),
+                    isSelected: settingsStore.settings.preferredMicrophoneUID.isEmpty
+                )
+            }
+            Divider()
+            ForEach(microphones) { microphone in
+                Button {
+                    settingsStore.settings.preferredMicrophoneUID = microphone.uid
+                } label: {
+                    microphoneMenuLabel(
+                        title: microphone.name,
+                        isSelected: settingsStore.settings.preferredMicrophoneUID == microphone.uid
+                    )
+                }
+            }
+        }
+        Divider()
+        Menu(AppLocalizer.text("言語 / Language", language: uiLanguage)) {
+            ForEach(AppLanguage.allCases) { language in
+                Button {
+                    Task {
+                        languageProfileMessage = nil
+                        let result = await appDelegate.applyLanguageProfile(language)
+                        if case .failure(let failure) = result {
+                            languageProfileMessage = failure.message
+                        }
+                    }
+                } label: {
+                    microphoneMenuLabel(
+                        title: language.localizedDisplayName(for: uiLanguage),
+                        isSelected: settingsStore.settings.languagePreferences.uiLanguage == language
+                            && settingsStore.settings.languagePreferences.sttLanguage == language
+                            && settingsStore.settings.languagePreferences.aiOutputLanguage == .automatic
+                    )
+                }
+            }
+            if appDelegate.isApplyingLanguageProfile {
+                Divider()
+                Text(AppLocalizer.text("言語を準備しています…", language: uiLanguage))
+            }
+        }
+        .disabled(appDelegate.isApplyingLanguageProfile)
+        if let languageProfileMessage {
+            Text(languageProfileMessage)
+                .foregroundStyle(.red)
+        }
+        Divider()
+        Toggle(AppLocalizer.text("AIアシスト", language: uiLanguage), isOn: Binding(
+            get: { settingsStore.settings.cleanupEnabled },
+            set: { settingsStore.settings.cleanupEnabled = $0 }
+        ))
+        if appDelegate.lastAICommandOutput != nil {
+            Button(AppLocalizer.text("最後のAI出力をコピー", language: uiLanguage)) {
+                appDelegate.copyLastAICommandOutput()
+            }
+        }
+        Button(AppLocalizer.text("直前の原文をコピー", language: uiLanguage)) {
+            appDelegate.copyLastOriginalTranscript()
+        }
+        .disabled(!appDelegate.hasLastOriginalTranscript)
+        Divider()
+        if OnboardingResumePolicy.shouldOfferResume(
+            allPermissionsGranted: permissionManager.allGranted(),
+            setupIsComplete: settingsStore.settings.setupProgress.isComplete
+        ) {
+            Button(AppLocalizer.text("セットアップを再開…", language: uiLanguage)) {
+                appDelegate.resumeOnboarding()
+            }
+        }
+        Button(AppLocalizer.text("セットアップガイド…", language: uiLanguage)) {
+            appDelegate.showOnboardingGuide()
+        }
+        Button(AppLocalizer.text("設定…", language: uiLanguage)) {
+            openWindow(id: "main-window")
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        Divider()
+        Button(AppLocalizer.text("終了", language: uiLanguage)) {
+            NSApp.terminate(nil)
+        }
+        }
+        .onAppear {
+            refreshMicrophones()
+        }
+        .onChange(of: uiLanguage) {
+            refreshMicrophones()
+        }
+        .environment(\.locale, uiLanguage.locale)
+    }
+
+    private func refreshMicrophones() {
+        microphones = MicrophoneDeviceManager.inputDevices()
+        defaultMicrophoneName = MicrophoneDeviceManager.defaultInputDevice()?.name
+            ?? AppLocalizer.text("現在のデバイス", language: uiLanguage)
+    }
+
+    @ViewBuilder
+    private func microphoneMenuLabel(title: String, isSelected: Bool) -> some View {
+        if isSelected {
+            Label(title, systemImage: "checkmark")
+        } else {
+            Text(title)
+        }
+    }
+}
+
+/// 「AI処理をリセット」を押してよい条件。純関数にして回帰テストで固定する。
+///
+/// 録音中・処理中に走らせると、進行中の処理を中断してしまう。二重実行も
+/// 防ぐ。エラー表示中は復帰手段として押せる必要があるので許可する。
+/// 「AI処理をリセット」の表示状態。**解決済み文字列ではなく状態を保持する。**
+/// 以前は `uiText(...)` の結果を直接持っていたため、表示中にUI言語を切り替えても
+/// 元の言語のまま残り続けた（2026-07-30の実機報告）。描画のたびにローカライズを
+/// 通せるよう、ここでは言語に依存しない値だけを持つ。
+///
+/// `failed` が持つのは **ローカライズ前のメッセージ**。描画時に
+/// `AppLocalizer.textOrLiteral(_:language:)` を通すことで、カタログにある文言は
+/// 切替に追従し、無いものはそのまま表示される。
+enum AIProcessingResetStatus: Equatable {
+    case resetting
+    case succeeded
+    case failed(rawMessage: String)
+
+    var isFailure: Bool {
+        if case .failed = self { return true }
+        return false
+    }
+}
+
+enum AIProcessingResetPolicy {
+    static func allowsReset(
+        phase: PipelinePhase
+    ) -> Bool {
+        switch phase {
+        case .idle, .error:
+            return true
+        case .starting, .recording, .transcribing, .cleaning, .inserting:
+            return false
+        }
+    }
+}
+
+/// 録音開始時に整形セッションの先回り準備（prewarm）を走らせてよい条件。純関数にして回帰テストで固定する。
+///
+/// オンデバイスAIが使えない時は準備しても無駄なので、何もしない（整形は失敗として扱われる）。
+enum RecordingStartPrewarmPolicy {
+    static func shouldPrewarm(
+        mode: VoiceMode,
+        cleanupEnabled: Bool,
+        aiAvailable: Bool
+    ) -> Bool {
+        // 「AIに指示」は整形の準備を使わない（分類後に本文生成が決まるため、§6.2）。
+        guard mode == .voiceInput else { return false }
+        guard cleanupEnabled else { return false }
+        return aiAvailable
+    }
+}
+
+enum AICommandCaptureGuidanceSemanticAction: String, Equatable {
+    case questionWithoutSelection
+    case clipboardRecovery
+}
+
+/// 選択取得失敗後に提示してよい操作を、UIやclosureから分離して決める。
+enum AICommandCaptureGuidanceActionPolicy {
+    static func actions(
+        for failure: SelectionCaptureFailure,
+        clipboardVariantEnabled: Bool,
+        hasSourceProcessIdentifier: Bool,
+        allowsClipboardRecovery: Bool
+    ) -> [AICommandCaptureGuidanceSemanticAction] {
+        var actions: [AICommandCaptureGuidanceSemanticAction] = []
+
+        switch failure {
+        case .selectionUnsupported, .copyDidNotProduceText, .focusedElementUnavailable:
+            actions.append(.questionWithoutSelection)
+        case .externalCompatibilityDisabled, .accessibilityPermissionMissing, .secureInput,
+             .clipboardChanged, .clipboardRestoreFailed:
+            break
+        }
+
+        guard clipboardVariantEnabled,
+              hasSourceProcessIdentifier,
+              allowsClipboardRecovery else {
+            return actions
+        }
+        switch failure {
+        case .externalCompatibilityDisabled, .selectionUnsupported, .copyDidNotProduceText,
+             .focusedElementUnavailable:
+            actions.append(.clipboardRecovery)
+        case .accessibilityPermissionMissing, .secureInput, .clipboardChanged, .clipboardRestoreFailed:
+            break
+        }
+        return actions
+    }
+}
+
+/// Debug用オンボーディングはHUDを作らないため、AppKitのactive通知でHUDへ触れない。
+/// 通常版でのHUD未初期化も安全に無視するため、判定を純粋な規則として固定する。
+enum RecordingHUDLifecyclePolicy {
+    static func shouldReassert(isDebug: Bool, hasHUD: Bool) -> Bool {
+        !isDebug && hasHUD
+    }
+}
+
+/// Debug.appが起動していない通常サブシステムを、終了時に初期化しないための規則。
+enum ApplicationTerminationSubsystemPolicy {
+    static func runsShutdown(isDebug: Bool) -> Bool { !isDebug }
+}
+
+enum ApplicationTerminationOriginPolicy {
+    static let quitReasonKeyword: AEKeyword = 0x7768_793F // `why?`
+
+    static func hasSystemQuitReason(
+        eventClass: AEEventClass,
+        eventID: AEEventID,
+        hasAttribute: Bool,
+        hasParameter: Bool
+    ) -> Bool {
+        eventClass == kCoreEventClass
+            && eventID == kAEQuitApplication
+            && (hasAttribute || hasParameter)
+    }
+
+    static func hasSystemQuitReason(in event: NSAppleEventDescriptor?) -> Bool {
+        guard let event else { return false }
+        return hasSystemQuitReason(
+            eventClass: event.eventClass,
+            eventID: event.eventID,
+            hasAttribute: event.attributeDescriptor(forKeyword: quitReasonKeyword) != nil,
+            hasParameter: event.paramDescriptor(forKeyword: quitReasonKeyword) != nil
+        )
+    }
+
+    static func isUserInitiated(hasSystemQuitReason: Bool) -> Bool {
+        !hasSystemQuitReason
+    }
+}
+
+/// graceful終了の締切に関する規則。`.shuttingDown`へ入った時刻だけで決まり、
+/// 以後のQuit要求では動かない。
+enum ApplicationTerminationDeadlinePolicy {
+    static let gracefulInterval: TimeInterval = 3
+    static let hardExitInterval: TimeInterval = 8
+    /// applicationWillTerminateの後もAppKitのteardownで固まりうるため、2段目の締切を残す。
+    static let postReplyExitInterval: TimeInterval = 5
+    /// replyしてもapplicationWillTerminateが届かない＝終了が取り消された、と判断するまでの猶予。
+    static let abandonedReplyInterval: TimeInterval = 5
+
+    /// 一度決めた締切は延ばさない。⌘Qの連打でgraceful側だけが後ろへずれると、
+    /// 動かない強制終了の締切に追い越されて強制終了に倒れる。
+    static func gracefulDeadline(
+        now: Date,
+        existing: Date?,
+        interval: TimeInterval = gracefulInterval
+    ) -> Date {
+        existing ?? now.addingTimeInterval(interval)
+    }
+
+    static func remainingInterval(now: Date, deadline: Date) -> TimeInterval {
+        max(0, deadline.timeIntervalSince(now))
+    }
+
+    /// ⌘Qの連打で、同じ絶対締切を見張るだけのTaskを作り直さない。
+    static func armsTimeoutWatchdog(hasArmedWatchdog: Bool) -> Bool { !hasArmedWatchdog }
+
+    static func armsPreReplyForcedExit(isUserInitiated: Bool) -> Bool { isUserInitiated }
+
+    static func permitsForcedExit(
+        deadlineGeneration: Int,
+        currentGeneration: Int,
+        isCancelled: Bool
+    ) -> Bool {
+        !isCancelled && deadlineGeneration == currentGeneration
+    }
+}
+
+private final class ApplicationTerminationHardDeadlineState: @unchecked Sendable {
+    struct Identity: Equatable {
+        let generation: Int
+        let token: UUID
+    }
+
+    private let lock = NSLock()
+    private var activeIdentity: Identity?
+
+    var hasActiveDeadline: Bool {
+        lock.withLock { activeIdentity != nil }
+    }
+
+    func arm(generation: Int) -> Identity {
+        let identity = Identity(generation: generation, token: UUID())
+        lock.withLock { activeIdentity = identity }
+        return identity
+    }
+
+    func cancel() {
+        lock.withLock { activeIdentity = nil }
+    }
+
+    func isActive(_ identity: Identity) -> Bool {
+        lock.withLock {
+            guard let activeIdentity, activeIdentity.token == identity.token else {
+                return false
+            }
+            return ApplicationTerminationDeadlinePolicy.permitsForcedExit(
+                deadlineGeneration: identity.generation,
+                currentGeneration: activeIdentity.generation,
+                isCancelled: false
+            )
+        }
+    }
+}
+
+/// AppKitへは一度だけreplyし、複数のQuit要求でも同じshutdown taskを共有する。
+@MainActor
+final class ApplicationTerminationCoordinator {
+    enum State: Equatable { case idle, shuttingDown, replied }
+
+    private(set) var state: State = .idle
+    private var shutdownTask: Task<Void, Never>?
+    private var timeoutTask: Task<Void, Never>?
+    /// replyしても終了が始まらなかった場合に、通常動作へ戻すための監視。強制終了はしない。
+    private var abandonedReplyTask: Task<Void, Never>?
+    /// MainActorが詰まっても発火できる、非MainActorの最終安全弁。
+    private var hardDeadlineWorkItem: DispatchWorkItem?
+    private let hardDeadlineState = ApplicationTerminationHardDeadlineState()
+    /// `.shuttingDown`へ入った時に一度だけ決める絶対締切。
+    private var gracefulDeadline: Date?
+    /// 取り消し後に遅れて完了したshutdownが、次の世代へreplyしないための識別子。
+    private var terminationGeneration = 0
+    private let shutdown: @MainActor () async -> Void
+    private let reply: @MainActor () -> Void
+    private let timeoutWarning: @MainActor () -> Void
+    /// 強制終了の直前に、時間を区切って試すだけの後始末。
+    private let lastResortCleanup: @Sendable () -> Void
+    private let forcedExit: @Sendable () -> Void
+
+    init(
+        shutdown: @escaping @MainActor () async -> Void,
+        reply: @escaping @MainActor () -> Void,
+        timeoutWarning: @escaping @MainActor () -> Void,
+        lastResortCleanup: @escaping @Sendable () -> Void = {},
+        // `exit`はatexitハンドラとstdioのteardownを走らせるため、逃げようとしている
+        // スレッドが握るロックで止まりうる。最終手段は`_exit`にする。
+        forcedExit: @escaping @Sendable () -> Void = { _exit(0) }
+    ) {
+        self.shutdown = shutdown
+        self.reply = reply
+        self.timeoutWarning = timeoutWarning
+        self.lastResortCleanup = lastResortCleanup
+        self.forcedExit = forcedExit
+    }
+
+    /// MainActorが本当に詰まっていても終了を止めないよう、時間を区切って試すだけ。
+    nonisolated static func runBoundedOnMainThread(timeout: TimeInterval, work: @escaping @MainActor () -> Void) {
+        let semaphore = DispatchSemaphore(value: 0)
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated { work() }
+            semaphore.signal()
+        }
+        _ = semaphore.wait(timeout: .now() + timeout)
+    }
+
+    /// 締切が武装されているか。強制終了が取り消し後まで生き残っていないことを外から確かめる。
+    var hasArmedForcedExitDeadline: Bool { hardDeadlineState.hasActiveDeadline }
+
+    func request(isUserInitiated: Bool = true) -> NSApplication.TerminateReply {
+        switch state {
+        case .replied:
+            return .terminateNow
+        case .shuttingDown:
+            // graceful側は同じ絶対締切を使う。system起点の要求に続いて利用者が⌘Qした時は、
+            // その時点からpre-reply強制終了を新しく武装する。
+            armTimeoutWatchdogIfNeeded()
+            if ApplicationTerminationDeadlinePolicy.armsPreReplyForcedExit(
+                isUserInitiated: isUserInitiated
+            ), !hasArmedForcedExitDeadline {
+                armHardDeadline(
+                    after: ApplicationTerminationDeadlinePolicy.hardExitInterval,
+                    reason: "terminationCoordinatorが締切内にreplyできなかったため強制終了します",
+                    generation: terminationGeneration
+                )
+            }
+            return .terminateLater
+        case .idle:
+            state = .shuttingDown
+            gracefulDeadline = ApplicationTerminationDeadlinePolicy.gracefulDeadline(
+                now: Date(),
+                existing: nil
+            )
+            terminationGeneration += 1
+            let generation = terminationGeneration
+            shutdownTask = Task { [weak self] in
+                guard let self else { return }
+                await self.shutdown()
+                self.replyOnce(generation: generation)
+            }
+            armTimeoutWatchdogIfNeeded()
+            if ApplicationTerminationDeadlinePolicy.armsPreReplyForcedExit(
+                isUserInitiated: isUserInitiated
+            ) {
+                armHardDeadline(
+                    after: ApplicationTerminationDeadlinePolicy.hardExitInterval,
+                    reason: "terminationCoordinatorが締切内にreplyできなかったため強制終了します",
+                    generation: generation
+                )
+            }
+            return .terminateLater
+        }
+    }
+
+    private func armTimeoutWatchdogIfNeeded() {
+        guard ApplicationTerminationDeadlinePolicy.armsTimeoutWatchdog(
+            hasArmedWatchdog: timeoutTask != nil
+        ) else { return }
+        let deadline = ApplicationTerminationDeadlinePolicy.gracefulDeadline(
+            now: Date(),
+            existing: gracefulDeadline
+        )
+        gracefulDeadline = deadline
+        let remaining = ApplicationTerminationDeadlinePolicy.remainingInterval(now: Date(), deadline: deadline)
+        timeoutTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+            } catch is CancellationError {
+                return
+            } catch {
+                return
+            }
+            guard let self else { return }
+            self.handleTimeout()
+        }
+    }
+
+    /// MainActorのTaskに依存しない絶対締切。MainActorが完全に詰まっていても
+    /// Quitを確実に終わらせる。
+    private func armHardDeadline(after interval: TimeInterval, reason: String, generation: Int) {
+        cancelHardDeadline()
+        let cleanup = lastResortCleanup
+        let exitNow = forcedExit
+        let deadlineState = hardDeadlineState
+        let identity = deadlineState.arm(generation: generation)
+        let workItem = DispatchWorkItem {
+            guard deadlineState.isActive(identity) else { return }
+            AppLog.shared.warn(reason)
+            // クリップボードの復元と設定の保存はapplicationWillTerminateにしかない。
+            // `_exit`はそこを通らないので、最後に時間を区切って試しておく。
+            cleanup()
+            guard deadlineState.isActive(identity) else { return }
+            // AppLogは非同期に書くため、この警告を残すには終了前に追いつかせる。
+            AppLog.shared.flush(timeout: 0.5)
+            guard deadlineState.isActive(identity) else { return }
+            exitNow()
+        }
+        hardDeadlineWorkItem = workItem
+        DispatchQueue.global().asyncAfter(deadline: .now() + interval, execute: workItem)
+    }
+
+    private func cancelHardDeadline() {
+        hardDeadlineWorkItem?.cancel()
+        hardDeadlineWorkItem = nil
+        hardDeadlineState.cancel()
+    }
+
+    func replyOnce() {
+        replyOnce(generation: terminationGeneration)
+    }
+
+    private func replyOnce(generation: Int) {
+        guard generation == terminationGeneration, state != .replied else { return }
+        state = .replied
+        timeoutTask?.cancel()
+        timeoutTask = nil
+        // replyしてもAppKitが終了を取り止めることがある（ログアウトの取り消しなど）。
+        // 締切を持ち越すと、動き続けているアプリを`_exit`で殺すことになるので、
+        // teardownの安全弁は本当に終了する時だけ届くapplicationWillTerminateで張り直す。
+        cancelHardDeadline()
+        armAbandonedReplyWatchdog(generation: generation)
+        reply()
+    }
+
+    /// applicationWillTerminateからだけ呼ぶ。AppKitがここまで来た時は本当に終了する
+    /// ので、reply後のteardownが固まる分だけ2段目の締切を武装する。
+    func confirmTermination() {
+        abandonedReplyTask?.cancel()
+        abandonedReplyTask = nil
+        armHardDeadline(
+            after: ApplicationTerminationDeadlinePolicy.postReplyExitInterval,
+            reason: "reply後のteardownが締切内に終わらなかったため強制終了します",
+            generation: terminationGeneration
+        )
+    }
+
+    /// 始まった終了が取り消された時に、締切ごと`.idle`へ戻す。世代を進めるので、
+    /// 遅れて完了した前の世代のshutdownはreplyしない。以後のQuitは最初からやり直せる。
+    func cancelTermination() {
+        terminationGeneration += 1
+        state = .idle
+        gracefulDeadline = nil
+        timeoutTask?.cancel()
+        timeoutTask = nil
+        abandonedReplyTask?.cancel()
+        abandonedReplyTask = nil
+        shutdownTask?.cancel()
+        shutdownTask = nil
+        cancelHardDeadline()
+    }
+
+    /// replyしたのにapplicationWillTerminateが届かない場合の戻り道。ここでは
+    /// 何も終了させず、状態と締切を通常動作へ戻すだけにする。
+    private func armAbandonedReplyWatchdog(generation: Int) {
+        abandonedReplyTask?.cancel()
+        let interval = ApplicationTerminationDeadlinePolicy.abandonedReplyInterval
+        abandonedReplyTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+            } catch {
+                return
+            }
+            guard let self, generation == self.terminationGeneration else { return }
+            AppLog.shared.info("終了要求が取り消されたため通常動作へ戻ります")
+            self.cancelTermination()
+        }
+    }
+
+    func handleTimeout() {
+        guard state != .replied else { return }
+        timeoutWarning()
+        replyOnce()
+    }
+}
+
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
+    struct ModelReconnectFailure: LocalizedError {
+        let message: String
+
+        var errorDescription: String? { message }
+    }
+
+    let appState = AppState()
+    // CLI回帰テストはAppDelegate生成直後に終了するため、通常の設定ファイルへ
+    // 触れないよう設定ストアは実際に必要になった時だけ初期化する。
+    lazy var settingsStore = SettingsStore(storageRootURL: OnboardingRuntimeProfile.storageRootURL)
+    lazy var inputHistoryStore = InputHistoryStore(storageRootURL: OnboardingRuntimeProfile.storageRootURL)
+    lazy var personalDictionaryStore = PersonalDictionaryStore(storageRootURL: OnboardingRuntimeProfile.storageRootURL)
+    lazy var customInstructionStateStore = CustomInstructionStateStore(
+        storageRootURL: OnboardingRuntimeProfile.storageRootURL
+    )
+    lazy var aiCommandCustomInstructionStateStore = CustomInstructionStateStore(
+        fileName: "ai_command_custom_instruction_state.json",
+        legacyFileName: nil,
+        storageRootURL: OnboardingRuntimeProfile.storageRootURL
+    )
+    let transcriptionEngine = TranscriptionEngine()
+    lazy var speechLanguagePreparationCoordinator = SpeechLanguagePreparationCoordinator(
+        engine: transcriptionEngine
+    )
+    // 通常音声入力のAI整形は、オンデバイスのFoundation Modelsだけで行う。
+    lazy var dictationCleanup = DictationCleanupService()
+    /// 取消・音声認識の打切り・AI失敗の時の原文。メモリ上だけで保持する（ADD-01）。
+    private lazy var lastOriginalTranscript: LastOriginalTranscriptStore = {
+        let store = LastOriginalTranscriptStore()
+        store.onAvailabilityChange = { [weak self] available in
+            self?.hasLastOriginalTranscript = available
+        }
+        return store
+    }()
+    // 「AIに指示」もオンデバイスのFoundation Modelsだけで行う。生成の調停役は整形と共有し、
+    // 同時に1件だけ動かす（「AI処理をリセット」で作り直された後も最新の調停役を使う）。
+    lazy var aiCommandService = AICommandService(coordinator: { [unowned self] in
+        self.dictationCleanup.coordinator
+    })
+    // 最適化も同じ生成器・調停役を使い、音声入力に優先権を譲る。
+    lazy var instructionOptimizationService = InstructionOptimizationService(coordinator: { [unowned self] in
+        self.dictationCleanup.coordinator
+    })
+    let audioRecorder = AudioRecorder()
+    let textInjector = TextInjector()
+    let selectedTextCapture = SelectedTextCapture()
+    let clipboardSourceReader = ClipboardSourceReader()
+    lazy var aiCommandResultWindows = AICommandResultWindowController(
+        metricsProvider: { [weak self] in
+            PopupUIScaleMetrics(settingsScale: self?.settingsStore.settings.settingsDisplayScale ?? SettingsUIScaleMetrics.standardScale)
+        },
+        languageProvider: { [weak self] in
+            self?.settingsStore.settings.languagePreferences.uiLanguage ?? .japanese
+        }
+    )
+    lazy var permissionManager = PermissionManager()
+    private lazy var onboardingRestartIntentStore = OnboardingRestartIntentStore()
+    private var hotkeyManager: HotkeyManager!
+    private var hud: RecordingHUDController!
+    private var onboardingController: OnboardingWindowController!
+    private var settingsCancellable: AnyObjectHolder?
+    private var dictionaryCancellable: AnyObjectHolder?
+    private var dictionaryRecoveryPhaseCancellable: AnyObjectHolder?
+    private var autoStopTask: Task<Void, Never>?
+    private var recordingStartTask: Task<Void, Never>?
+    private var recordingStartTaskSessionID: UUID?
+    private var recordingStartTimeoutTask: Task<Void, Never>?
+    private var recordingStartTimeoutSessionID: UUID?
+    private var processingTask: Task<Void, Never>?
+    private var processingTaskSessionID: UUID?
+    private var aiCommandFailureDismissTask: Task<Void, Never>?
+    private var aiCommandFailureOwnership = AICommandFailureOwnership()
+    private var completedNormalInputCount = 0
+    private var aiCommandCaptureTask: Task<Void, Never>?
+    private let aiCommandCaptureCompletionGate = AICommandCaptureCompletionGate()
+    private var aiCommandCaptureTimeoutTask: Task<Void, Never>?
+    private var pendingClipboardCancellationReceipt: ClipboardCancellationReceipt?
+    private var pendingClipboardCancellationWindowID: UUID?
+    private var pendingClipboardCancellationExpiryTask: Task<Void, Never>?
+    private var menuBarWarningTask: Task<Void, Never>?
+    private var didLogTerminationOrigin = false
+    private var activeVoiceSession: VoiceSession? {
+        didSet {
+            // HotkeyManagerはFn停止を活動中のハンズフリーsessionだけへ振り分ける。
+            // sessionの作成・破棄と同じ代入点で同期し、古い活動状態を残さない。
+            hotkeyManager?.handsFreeSendIsActive = activeVoiceSession?.handsFreeSendSession != nil
+            // 録音中に設定画面でキーを変更しても、開始時snapshotのChordで停止できるようにする。
+            if hotkeyManager != nil {
+                applyHandsFreeSendHotkeySettings(settingsStore.settings)
+            }
+        }
+    }
+    private var pendingNormalHold = false
+    /// tapが落ちた時点で活動中のsessionが無かった場合に、次に生成されるハンズフリー
+    /// sessionへ送信権限の剥奪を引き継ぐ一度限りのフラグ。
+    private var pendingHandsFreeSendRevocation = false
+    private var handsFreeSendTriggerTask: Task<Void, Never>?
+    private var handsFreeSendTriggerTaskID: UUID?
+    private var didWarmUp = false
+    private var warmUpTask: Task<Void, Error>?
+    private lazy var terminationCoordinator = ApplicationTerminationCoordinator(
+        shutdown: { [weak self] in
+            guard ApplicationTerminationSubsystemPolicy.runsShutdown(
+                isDebug: OnboardingRuntimeProfile.isDebug
+            ) else { return }
+            guard let self else { return }
+            await self.audioRecorder.stop()
+            self.aiCommandService.cancelAll()
+            self.instructionOptimizationService.cancelAll()
+        },
+        reply: { NSApplication.shared.reply(toApplicationShouldTerminate: true) },
+        timeoutWarning: { AppLog.shared.warn("終了処理（shutdown）が3秒以内に完了しなかったため終了します") },
+        // 強制終了はapplicationWillTerminateを通らない。利用者のクリップボードに
+        // ItJustTalksが入れた文字列を残さず、未保存の設定も落とさないよう、
+        // 時間を区切って同じ後始末だけ試す。
+        lastResortCleanup: { [weak self] in
+            ApplicationTerminationCoordinator.runBoundedOnMainThread(timeout: 1) {
+                guard let self else { return }
+                self.textInjector.restorePendingScopedClipboardIfOwned()
+                self.settingsStore.flushPendingSave()
+            }
+        }
+    )
+    private var didOfferDictionaryRecovery = false
+    private var didShowUpstreamAppNotice = false
+    private var upstreamAppLaunchObserver: NSObjectProtocol?
+    private var wakeObserver: NSObjectProtocol?
+
+    @Published var menuBarIconName = "mic"
+    @Published private(set) var opensDebugMainWindowAutomatically = false
+    @Published private(set) var isApplyingLanguageProfile = false
+    /// クリップボードバリアントの貼り付けを送出した直近のAI出力。メモリ上のみで、
+    /// ディスクへは書かない。履歴（`InputHistoryStore`）へも渡さない。次のAI実行で
+    /// 上書きされ、アプリ終了で消える。
+    @Published private(set) var lastAICommandOutput: String?
+    @Published private(set) var storageNotice: String?
+    /// メニュー「直前の原文をコピー」を有効にするか。本文そのものは公開しない。
+    @Published private(set) var hasLastOriginalTranscript = false
+    /// 通常音声入力をAI整形せずに入力した時の通知（翻訳済みの文言。本文は含まない）。
+    @Published private(set) var dictationNotice: String?
+
+    /// メニューバーの「直前の原文をコピー」からだけ呼ぶ、利用者の明示操作。
+    func copyLastOriginalTranscript() {
+        lastOriginalTranscript.expireIfNeeded()
+        guard lastOriginalTranscript.hasTranscript else { return }
+        if !lastOriginalTranscript.copy(to: NSPasteboard.general) {
+            AppLog.shared.warn("直前の原文をクリップボードへ書き込めませんでした")
+        }
+    }
+
+    /// メニューバーの「最後のAI出力をコピー」からだけ呼ぶ、利用者の明示操作。
+    ///
+    /// ここではowner markerを付けない。利用者が自分で⌘Cしたのと同じ意味の操作であり、
+    /// マーカーを付けると「出力をコピーして、続けてもう一度AIに指示する」という
+    /// 正当な流れが`ClipboardSourceReadPolicy`の自己再帰ガードで塞がれてしまう。
+    func copyLastAICommandOutput() {
+        guard let lastAICommandOutput else { return }
+        NSPasteboard.general.clearContents()
+        // clearContentsは既に走っている。書込みに失敗すると利用者のクリップボードは
+        // 空のままになるので、黙って捨てずに記録する。
+        if !NSPasteboard.general.setString(lastAICommandOutput, forType: .string) {
+            AppLog.shared.warn("最後のAI出力をクリップボードへ書き込めませんでした")
+        }
+    }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // GUI起動時、終了済みの子プロセスのstdinへ書き込むと
+        // SIGPIPEでプロセスごと即死するため、プロセス全体でSIGPIPEを無視する。
+        // これによりFileHandle.writeはシグナルではなくEPIPEエラーをthrowする経路になり、
+        // 既存のdo/catchで捕捉できるようになる。CLIテストモード判定より前に行う必要がある。
+        signal(SIGPIPE, SIG_IGN)
+
+        onboardingRestartIntentStore.cleanupOrphanedClaims()
+
+        // Debug.appはここで通常アプリの起動副作用を止める。これより後には本番ログ、履歴の
+        // prune、hotkey、音声warm-upがあるため、順序を変えないこと。
+        if OnboardingRuntimeProfile.isDebug {
+            NSApp.setActivationPolicy(.regular)
+            let bundleIdentifier = Bundle.main.bundleIdentifier ?? ""
+            let restartIntent = onboardingRestartIntentStore.load(bundleIdentifier: bundleIdentifier)
+            let restartPresentationMode = restartIntent?.presentationMode
+            let presentsRestartIntent = DebugMainWindowLaunchPolicy.presentsRestartIntent(
+                isDebug: true,
+                mode: restartPresentationMode
+            )
+            opensDebugMainWindowAutomatically = DebugMainWindowLaunchPolicy.opensAutomatically(
+                isDebug: true,
+                restartPresentationMode: restartPresentationMode
+            )
+            if let restartIntent, presentsRestartIntent {
+                let restartPermissionManager = OnboardingRestartPresentationPolicy.usesSimulatedPermissions(
+                    for: restartIntent.presentationMode
+                ) ? PermissionManager(simulatedStates: .initial) : PermissionManager()
+                onboardingController = OnboardingWindowController(
+                    permissionManager: restartPermissionManager,
+                    settingsStore: settingsStore
+                )
+                presentRestartIntent(restartIntent)
+            } else if restartIntent != nil {
+                AppLog.shared.info(DebugLaunchLogPolicy.message(
+                    restartIntent: restartIntent,
+                    forcedInitialStepApplied: false,
+                    openedStepIndex: nil
+                ))
+                onboardingRestartIntentStore.clear()
+            } else {
+                AppLog.shared.info(DebugLaunchLogPolicy.message(
+                    restartIntent: nil,
+                    forcedInitialStepApplied: false,
+                    openedStepIndex: nil
+                ))
+            }
+            return
+        }
+
+        // 通常版はDockと⌘Tabに表示し、最後の設定Windowを閉じても常駐する。
+        NSApp.setActivationPolicy(.regular)
+
+        AppLog.shared.info("=== ItJustTalks起動 ===")
+        let bundle = Bundle.main
+        let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development"
+        let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "development"
+        let revision = bundle.object(forInfoDictionaryKey: "ItJustTalksBuildGitSHA") as? String ?? "unknown"
+        AppLog.shared.info("[Telemetry] launch version=\(version) build=\(build) revision=\(revision)")
+        if personalDictionaryStore.requiresRecovery {
+            storageNotice = "ユーザー辞書を読み込めないため、辞書を使わずに音声入力します。設定のユーザー辞書から復旧してください。"
+        }
+        // 設定が読めなかった場合、settingsはメモリ上の既定値になっている。その既定の
+        // 保持期間でpruneすると、ユーザーが選んでいない基準で履歴が削除される。
+        // 保存が無効化されている間は、履歴も消さない。
+        if settingsStore.canSave {
+            let normalPrune = inputHistoryStore.prune(retentionDays: settingsStore.settings.historyRetentionDays)
+            let aiPrune = inputHistoryStore.prune(
+                mode: InputHistoryMode.aiCommand,
+                retentionDays: settingsStore.settings.aiCommandSettings.historyRetentionDays
+            )
+            let handsFreePrune = inputHistoryStore.prune(
+                mode: InputHistoryMode.handsFreeSend,
+                retentionDays: settingsStore.settings.handsFreeSendSettings.historyRetentionDays
+            )
+            if [normalPrune, aiPrune, handsFreePrune].contains(where: { $0 != .saved }) {
+                noteHistoryStorageFailure()
+            }
+        } else {
+            AppLog.shared.warn("設定を読めなかったため、履歴の保持期間による削除は行いません")
+        }
+
+        // 起動のたびに一度、既存の保存済みディレクトリ・ファイルの権限を0700/0600へ是正する（べき等）。
+        // 履歴やAICommandRuntimeの件数に上限がないため、全走査で起動を待たせない。
+        let storageRoot = OnboardingRuntimeProfile.storageRootURL
+            ?? OnboardingRuntimeProfile.productionStorageRootURL
+        Task.detached(priority: .utility) {
+            StoragePermissions.remediateStorageRoot(storageRoot)
+        }
+
+        // CLIテストモードの処理（--test-stt）。該当すれば実行して終了する。
+        if handleCLITestModeIfRequested() {
+            return
+        }
+
+        hud = RecordingHUDController(
+            appState: appState,
+            metricsProvider: { [weak self] in
+                PopupUIScaleMetrics(settingsScale: self?.settingsStore.settings.settingsDisplayScale ?? SettingsUIScaleMetrics.standardScale)
+            },
+            languageProvider: { [weak self] in
+                self?.settingsStore.settings.languagePreferences.uiLanguage ?? .japanese
+            },
+            onCancelRecording: { [weak self] in
+                self?.cancelRecordingFromHUD()
+            },
+            onFinishRecording: { [weak self] in
+                self?.finishRecordingFromHUD()
+            }
+        )
+        onboardingController = OnboardingWindowController(
+            permissionManager: permissionManager,
+            settingsStore: settingsStore,
+            practiceTranscriptionEngine: transcriptionEngine
+        )
+
+        setupHotkeyManager()
+        observeSettingsChanges()
+
+        permissionManager.refresh()
+        logPermissionState()
+        observeUpstreamAppLaunch()
+        observeWakeForLastOriginalExpiry()
+
+        let bundleIdentifier = Bundle.main.bundleIdentifier ?? ""
+        if let restartIntent = onboardingRestartIntentStore.load(bundleIdentifier: bundleIdentifier) {
+            if restartIntent.presentationMode.isDebug {
+                onboardingRestartIntentStore.clear()
+            } else {
+                presentRestartIntent(restartIntent)
+                return
+            }
+        }
+
+        if permissionManager.allGranted(), settingsStore.settings.setupProgress.isComplete {
+            beginWarmUpAndStart()
+            openSettingsWindow()
+            offerDictionaryRecoveryIfNeeded()
+            noticeUpstreamAppIfRunning()
+        } else {
+            AppLog.shared.info("必要な権限または初回設定が未完了のため、セットアップを表示します")
+            onboardingController.showIfNeeded { [weak self] mode in
+                self?.finishOnboarding(mode: mode)
+            }
+        }
+    }
+
+    /// セットアップ完了時は、保存済み状態と権限をもう一度確認してから通常機能を開始する。
+    /// 初回インストールだけは、開始後に設定画面を開いて以後の変更場所を示す。
+    private func finishOnboarding(mode: OnboardingPresentationMode) {
+        permissionManager.refresh()
+        guard permissionManager.allGranted(), settingsStore.settings.setupProgress.isComplete else {
+            AppLog.shared.warn("オンボーディング完了時の状態確認に失敗したため、必要な確認画面を再表示します")
+            onboardingController.showIfNeeded { [weak self] retryMode in
+                self?.finishOnboarding(mode: retryMode)
+            }
+            return
+        }
+
+        AppLog.shared.info("オンボーディング完了。warmUpを開始します")
+        beginWarmUpAndStart()
+        offerDictionaryRecoveryIfNeeded()
+        noticeUpstreamAppIfRunning()
+
+        guard mode.opensSettingsAfterFinish else { return }
+        openSettingsWindow()
+    }
+
+    /// 通常版の設定Windowは既存のSwiftUI Window sceneに一元化する。
+    /// `Window(id:)` は同じWindowを前面化し、存在しなければ1枚だけ要求する。
+    private func openSettingsWindow() {
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .itJustTalksOpenSettings, object: nil)
+            if self.personalDictionaryStore.requiresRecovery {
+                NotificationCenter.default.post(name: .itJustTalksOpenDictionaryRecovery, object: nil)
+            }
+        }
+    }
+
+    /// スリープ中に「直前の原文」の10分が過ぎた場合、復帰時に消してメニューを無効にする（ADD-01）。
+    private func observeWakeForLastOriginalExpiry() {
+        guard wakeObserver == nil else { return }
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.lastOriginalTranscript.expireIfNeeded() }
+        }
+    }
+
+    /// ADD-09：ItJustTalksより後に派生元アプリが起動した場合も案内できるよう、起動通知を監視する。
+    private func observeUpstreamAppLaunch() {
+        guard upstreamAppLaunchObserver == nil else { return }
+        upstreamAppLaunchObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didLaunchApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard UpstreamAppCoexistence.isUpstreamAppLaunch(notification) else { return }
+            MainActor.assumeIsolated { self?.noticeUpstreamAppIfRunning() }
+        }
+    }
+
+    /// ADD-09：派生元アプリが同時に起動していれば、ホットキーの二重反応がありうることを
+    /// 非ブロッキングのパネルで1回の起動につき一度だけ案内する。起動・録音は止めない。
+    /// オンボーディング表示中は出さず、セットアップ完了時に改めて判定する。
+    private func noticeUpstreamAppIfRunning() {
+        guard !didShowUpstreamAppNotice,
+              !onboardingController.isPresentingWindow,
+              UpstreamAppCoexistence.isUpstreamAppRunning() else { return }
+        didShowUpstreamAppNotice = true
+        AppLog.shared.info("派生元アプリの同時起動を検出したため、案内を表示します")
+        aiCommandResultWindows.show(AICommandResultPayload(
+            spokenInstruction: "",
+            selectedText: nil,
+            answer: UpstreamAppCoexistence.noticeMessage(
+                language: settingsStore.settings.languagePreferences.uiLanguage
+            ),
+            title: UpstreamAppCoexistence.noticeTitle,
+            answerSectionTitle: "注意",
+            showsCopyButton: false,
+            presentation: .nonactivatingConfirmation
+        ))
+    }
+
+    private func offerDictionaryRecoveryIfNeeded() {
+        guard !didOfferDictionaryRecovery,
+              personalDictionaryStore.requiresRecovery,
+              appState.phase == .idle,
+              settingsStore.settings.setupProgress.isComplete,
+              permissionManager.allGranted() else { return }
+        didOfferDictionaryRecovery = true
+        aiCommandResultWindows.show(AICommandResultPayload(
+            spokenInstruction: "",
+            selectedText: nil,
+            answer: uiText("ユーザー辞書を読み込めませんでした。音声入力は辞書なしで利用できます。復旧方法は設定から確認できます。"),
+            title: "ユーザー辞書の復旧",
+            showsCopyButton: false,
+            actions: [
+                AICommandResultAction(
+                    id: "open_dictionary_recovery",
+                    title: "復旧方法を確認",
+                    style: .primary,
+                    handler: { [weak self] in self?.openSettingsWindow() }
+                ),
+                AICommandResultAction(
+                    id: "dictionary_recovery_later",
+                    title: "後で",
+                    style: .secondary,
+                    handler: {}
+                ),
+            ],
+            presentation: .nonactivatingConfirmation
+        ))
+    }
+
+    /// DockクリックやFinderからの再オープン時は、未完了セットアップを常に優先する。
+    func applicationShouldHandleReopen(
+        _ sender: NSApplication,
+        hasVisibleWindows: Bool
+    ) -> Bool {
+        let isDebug = OnboardingRuntimeProfile.isDebug
+        if !isDebug {
+            permissionManager.refresh()
+        }
+        switch DockLifecyclePolicy.reopenDestination(
+            isDebug: isDebug,
+            hasVisibleWindows: hasVisibleWindows,
+            allPermissionsGranted: isDebug ? false : permissionManager.allGranted(),
+            setupIsComplete: settingsStore.settings.setupProgress.isComplete
+        ) {
+        case .unchanged:
+            return false
+        case .onboarding:
+            onboardingController?.showIfNeeded { [weak self] mode in
+                self?.finishOnboarding(mode: mode)
+            }
+        case .settings:
+            openSettingsWindow()
+        }
+        return true
+    }
+
+    /// 通常版は設定Windowを閉じても、メニューバーとDockを維持する。
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        !DockLifecyclePolicy.keepsRunningAfterLastWindowClosed(
+            isDebug: OnboardingRuntimeProfile.isDebug
+        )
+    }
+
+    /// 前回の終了前に保存した位置を、次の通常起動で一度だけ表示する。
+    private func presentRestartIntent(_ intent: OnboardingRestartIntent) {
+        onboardingController.showRestartIntent(
+            intent,
+            onPresented: { [weak self] in
+                self?.onboardingRestartIntentStore.clear()
+            },
+            onInitialStepPresented: { step, index, forcedInitialStepApplied in
+                guard OnboardingRuntimeProfile.isDebug else { return }
+                AppLog.shared.info(DebugLaunchLogPolicy.message(
+                    restartIntent: intent,
+                    forcedInitialStepApplied: forcedInitialStepApplied && step == intent.step,
+                    openedStepIndex: index
+                ))
+            },
+            onPresentationUnavailable: { [weak self] in
+                if intent.presentationMode.isDebug {
+                    AppLog.shared.info(DebugLaunchLogPolicy.message(
+                        restartIntent: intent,
+                        forcedInitialStepApplied: false,
+                        openedStepIndex: nil
+                    ))
+                }
+                self?.onboardingRestartIntentStore.clear()
+                NotificationCenter.default.post(name: .itJustTalksOpenSettings, object: nil)
+            },
+            onClosed: { [weak self] in
+                guard let self,
+                      DebugMainWindowLaunchPolicy.opensAfterRestartWindowClosed(
+                          isDebug: OnboardingRuntimeProfile.isDebug,
+                          restartPresentationMode: intent.presentationMode
+                      ) else { return }
+                self.opensDebugMainWindowAutomatically = true
+            },
+            onFinish: { [weak self] mode in
+                guard let self else { return }
+                if !mode.isDebug {
+                    self.finishOnboarding(mode: mode)
+                }
+            }
+        )
+    }
+
+    private var uiLanguage: AppLanguage {
+        settingsStore.settings.languagePreferences.uiLanguage
+    }
+
+    private func uiText(_ japanese: String) -> String {
+        AppLocalizer.text(japanese, language: uiLanguage)
+    }
+
+    private func uiFormat(_ japanese: String, _ arguments: CVarArg...) -> String {
+        String(format: uiText(japanese), locale: uiLanguage.locale, arguments: arguments)
+    }
+
+    private func logPermissionState() {
+        let mic = permissionManager.microphoneState
+        let speech = permissionManager.speechRecognitionState
+        let accessibility = permissionManager.accessibilityState
+        AppLog.shared.info("権限状態: mic=\(mic), speech=\(speech), accessibility=\(accessibility)")
+    }
+
+    /// warmUpとhotkeyManager起動を行う。権限が揃った後にのみ呼ばれる。
+    /// warmUp失敗はキャッチしてHUD表示＋ログ記録のみに留め、プロセスは継続する。
+    private func beginWarmUpAndStart() {
+        guard !didWarmUp else { return }
+        didWarmUp = true
+
+        hotkeyManager.start()
+        _ = startWarmUpTaskIfNeeded()
+    }
+
+    /// 完了済みユーザーが必要な時だけ、短いセットアップガイドを開く。
+    func showOnboardingGuide() {
+        guard !OnboardingRuntimeProfile.isDebug else { return }
+        onboardingController?.showGuide()
+    }
+
+    /// 左上×で閉じた未完了セットアップを、アプリを終了せず安全に再開する。
+    func resumeOnboarding() {
+        guard !OnboardingRuntimeProfile.isDebug else { return }
+        permissionManager.refresh()
+        onboardingController?.showIfNeeded { [weak self] mode in
+            self?.finishOnboarding(mode: mode)
+        }
+    }
+
+    /// ユーザーが「AI処理をリセット」を押した時の処理。
+    ///
+    /// 実行中のAI整形をすべて取り消し、生成の調停役を作り直して待機状態へ戻す（R1）。
+    /// 止まらない作業が古い調停役に残っていても、次の整形を塞がない。
+    /// **設定・ユーザー辞書・入力履歴には一切触らない。**
+    func resetAIProcessingState() async -> Result<Void, ModelReconnectFailure> {
+        guard AIProcessingResetPolicy.allowsReset(
+            phase: appState.phase
+        ) else {
+            return .failure(ModelReconnectFailure(
+                message: uiText("処理が終わってからもう一度お試しください。")
+            ))
+        }
+        aiCommandService.cancelAll()
+        instructionOptimizationService.cancelAll()
+        dictationCleanup.reset()
+        if case .error = appState.phase {
+            appState.setPhase(.idle)
+            hud.hide()
+        }
+        AppLog.shared.info("AI処理をリセットしました")
+        return .success(())
+    }
+
+    private func startWarmUpTaskIfNeeded() -> Task<Void, Error> {
+        if let warmUpTask {
+            return warmUpTask
+        }
+
+        let task = Task { @MainActor in
+            AppLog.shared.info("warmUp開始")
+            let language = settingsStore.settings.languagePreferences.sttLanguage
+            switch await speechLanguagePreparationCoordinator.prepare(
+                to: language,
+                isVoiceProcessing: false
+            ) {
+            case .success:
+                AppLog.shared.info("warmUp完了")
+            case .failure(.superseded):
+                // 利用者が別言語を選んだ。新しい世代が準備を担当するため、起動失敗として表示しない。
+                // ただし、このTaskを残すと新しい世代が失敗した後に再試行できない。
+                self.warmUpTask = nil
+                return
+            case .failure:
+            AppLog.shared.error("音声認識エンジンの初期化に失敗しました")
+            appState.setPhase(.error(uiText("音声認識エンジンを初期化できませんでした。権限と音声モデルを確認して、もう一度試してください。")))
+            self.warmUpTask = nil
+            throw TranscriptionError.notWarmedUp
+            }
+        }
+        warmUpTask = task
+        return task
+    }
+
+    /// 設定画面からのSTT言語切替。録音・文字起こし中には切替を拒否し、
+    /// asset取得やwarm-upが成功した時だけ呼び出し側が保存値を更新する。
+    func prepareSpeechLanguageChange(to language: AppLanguage) async -> Result<Void, ModelReconnectFailure> {
+        guard appState.phase == .idle else {
+            return .failure(ModelReconnectFailure(
+                message: uiText("録音または処理が完了してから音声認識言語を変更してください。")
+            ))
+        }
+        switch await speechLanguagePreparationCoordinator.prepare(
+            to: language,
+            isVoiceProcessing: false
+        ) {
+        case .success:
+            return .success(())
+        case .failure(let failure):
+            // Speech frameworkの内部詳細をUIや保存値に流さない。timeout・取消でも旧engineと
+            // 旧設定を維持し、呼び出し側のPickerを必ず再有効化する。
+            AppLog.shared.warn("音声認識言語の切替に失敗しました: \(String(describing: failure))")
+            let message: String
+            switch failure {
+            case .timedOut:
+                message = uiText("音声モデルの準備が時間内に完了しませんでした。現在の言語のままにして、しばらくしてからもう一度試してください。")
+            case .busy:
+                message = uiText("録音または処理が完了してから音声認識言語を変更してください。")
+            case .superseded, .failed:
+                message = uiText("音声認識言語を変更できませんでした。権限と音声モデルを確認して、もう一度試してください。")
+            }
+            return .failure(ModelReconnectFailure(
+                message: message
+            ))
+        }
+    }
+
+    /// メニューバーの言語プロファイル。STTの準備に成功した時だけUI/STT/AI出力を一括で保存する。
+    /// 失敗・timeout時は、3つの保存済み値を一切変更しない。
+    func applyLanguageProfile(_ language: AppLanguage) async -> Result<Void, ModelReconnectFailure> {
+        guard appState.phase == .idle else {
+            return .failure(ModelReconnectFailure(
+                message: uiText("録音または処理が完了してから音声認識言語を変更してください。")
+            ))
+        }
+        guard !isApplyingLanguageProfile else {
+            return .failure(ModelReconnectFailure(
+                message: uiText("音声モデルを準備しています。完了してからもう一度試してください。")
+            ))
+        }
+        isApplyingLanguageProfile = true
+        defer { isApplyingLanguageProfile = false }
+
+        let result = await prepareSpeechLanguageChange(to: language)
+        guard case .success = result else { return result }
+        settingsStore.settings.languagePreferences.uiLanguage = language
+        settingsStore.settings.languagePreferences.sttLanguage = language
+        settingsStore.settings.languagePreferences.aiOutputLanguage = .automatic
+        settingsStore.flushPendingSave()
+        return .success(())
+    }
+
+    private func waitForWarmUpBeforeRecording() async throws {
+        if transcriptionEngine.isWarmedUp {
+            return
+        }
+        let task = startWarmUpTaskIfNeeded()
+        try await task.value
+    }
+
+    private func setupHotkeyManager() {
+        let settings = settingsStore.settings
+        hotkeyManager = HotkeyManager(
+            targetKeyCode: settings.hotkeyKeyCode,
+            isModifierKey: settings.hotkeyIsModifier,
+            recordingMode: RecordingMode(rawValue: settings.recordingMode) ?? .toggle
+        )
+        hotkeyManager.modifierMaskFromSettings = settings.hotkeyModifierMask
+        applyAICommandHotkeySettings(settings)
+        applyHandsFreeSendHotkeySettings(settings)
+        wireHotkeyCallbacks()
+    }
+
+    private func applyAICommandHotkeySettings(_ settings: ItJustTalksSettings) {
+        let ai = settings.aiCommandSettings
+        hotkeyManager.aiCommandEnabled = ai.enabled && settings.setupProgress.isComplete
+        hotkeyManager.aiCommandStartBinding = ai.startHotkey
+        hotkeyManager.aiCommandStopBinding = ai.stopHotkey
+        // 保存時のゲートだけでは足りない。設定JSONの手編集や、追加キーを保存した後で
+        // ハンズフリー送信を有効化した場合に、成立しないChordが生きたまま残る。
+        // 適用のたびに現在の全bindingで再検査する。
+        let clipboardVariantIsUsable = ai.clipboardVariantEnabled
+            && AICommandClipboardChordPolicy.eligibility(
+                startBinding: ai.startHotkey,
+                extraModifier: ai.clipboardVariantModifier,
+                stopBinding: ai.stopHotkey,
+                normalBinding: settings.normalHotkeyBinding,
+                handsFreeSendBinding: settings.handsFreeSendSettings.binding,
+                handsFreeSendEnabled: settings.handsFreeSendSettings.enabled
+            ) == .eligible
+        hotkeyManager.aiCommandClipboardModifier = clipboardVariantIsUsable ? ai.clipboardVariantModifier : nil
+    }
+
+    private func applyHandsFreeSendHotkeySettings(_ settings: ItJustTalksSettings) {
+        guard hotkeyManager != nil else { return }
+        let liveHandsFree = settings.handsFreeSendSettings
+        let sessionHandsFree = activeVoiceSession?.handsFreeSendSession?.snapshot.settings
+        let effectiveBindings = sessionHandsFree ?? liveHandsFree
+        hotkeyManager.handsFreeSendEnabled = liveHandsFree.enabled && settings.setupProgress.isComplete
+        hotkeyManager.handsFreeSendBinding = effectiveBindings.binding
+    }
+
+    /// 設定画面でキーを捕捉している間だけ、グローバルhotkeyから録音を起動させない。
+    /// 解除時は、確定に使ったキーが解放されるまで抑止を維持する。
+    func setHotkeyCaptureActive(_ active: Bool, capturedKeys: [HotkeyKey] = []) {
+        guard hotkeyManager != nil else { return }
+
+        if active {
+            hotkeyManager.setRecordingTriggersSuppressed(true)
+            return
+        }
+        hotkeyManager.resumeRecordingTriggers(afterReleasing: capturedKeys)
+    }
+
+    private func wireHotkeyCallbacks() {
+        hotkeyManager.onKeyDown = { [weak self] in self?.handleHotkeyDown() }
+        hotkeyManager.onKeyUp = { [weak self] in self?.handleHotkeyUp() }
+        hotkeyManager.onSinglePress = { [weak self] in self?.handleHotkeyTogglePress() }
+        hotkeyManager.onAICommandStart = { [weak self] source in self?.handleAICommandStart(source) }
+        hotkeyManager.onAICommandStop = { [weak self] in self?.handleAICommandStop() ?? false }
+        // 開始処理はNormalPasteTarget/InsertionDestinationのAX同期IPCを含む。
+        // これをCGEvent tapのコールバック内で実行するとtapがタイムアウトし、
+        // アプリ全体のホットキーが停止する（2026-07-30の実機障害）。
+        // tapへは即座に制御を返し、実処理は次のmain loopへ逃がす。
+        hotkeyManager.onHandsFreeSendToggle = { [weak self] in
+            guard let self else { return false }
+            let stopping = self.canHandleHandsFreeSendStop()
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if stopping {
+                    _ = self.handleHandsFreeSendStop()
+                } else {
+                    self.handleHandsFreeSendStart()
+                }
+            }
+            return stopping
+        }
+        // `cancelRecording()` はAppLogの書き出しと状態遷移を同期で行う。すぐ上の
+        // `onHandsFreeSendToggle` と同じ理由で、tapコールバック内に置いたままだと
+        // tapを塞ぐ。消費するかどうかだけを同期で決め、実処理は次のmain loopへ逃がす。
+        hotkeyManager.onEscape = { [weak self] in
+            guard let self, self.canCancelWithEscape() else { return false }
+            Task { @MainActor [weak self] in
+                self?.cancelRecording()
+            }
+            return true
+        }
+        hotkeyManager.onEventTapDisabled = { [weak self] in
+            guard let self else { return }
+            if let handsFreeSession = self.activeVoiceSession?.handsFreeSendSession {
+                handsFreeSession.revokeSendAuthorization()
+                return
+            }
+            // Chord成立からsession生成までは1 main loop分の隙がある。その間にtapが
+            // 落ちた場合も、生成直後のsessionから送信権限を落とす。
+            self.pendingHandsFreeSendRevocation = true
+        }
+        hotkeyManager.onHoldTrackingInterrupted = { [weak self] in
+            self?.cancelInterruptedNormalHoldRecording()
+        }
+        hotkeyManager.onPermissionDenied = { [weak self] in
+            guard let self else { return }
+            self.appState.setPhase(.error(
+                self.uiText("Accessibility権限が必要です。システム設定から許可してください")
+            ))
+        }
+    }
+
+    /// SettingsStoreの変更を監視し、ホットキー関連設定が変わったらtapを作り直す。
+    private func observeSettingsChanges() {
+        var lastKeyCode = settingsStore.settings.hotkeyKeyCode
+        var lastIsModifier = settingsStore.settings.hotkeyIsModifier
+        var lastMode = settingsStore.settings.recordingMode
+        var lastModifierMask = settingsStore.settings.hotkeyModifierMask
+        var lastAICommandSettings = settingsStore.settings.aiCommandSettings
+        var lastHandsFreeSendSettings = settingsStore.settings.handsFreeSendSettings
+        var lastSetupProgress = settingsStore.settings.setupProgress
+
+        let cancellable = settingsStore.settingsPublisher.sink { [weak self] newSettings in
+            guard let self else { return }
+            let hotkeyRelevantChange = newSettings.hotkeyKeyCode != lastKeyCode
+                || newSettings.hotkeyIsModifier != lastIsModifier
+                || newSettings.recordingMode != lastMode
+                || newSettings.hotkeyModifierMask != lastModifierMask
+                || newSettings.aiCommandSettings.startHotkey != lastAICommandSettings.startHotkey
+                || newSettings.aiCommandSettings.stopHotkey != lastAICommandSettings.stopHotkey
+                || newSettings.aiCommandSettings.enabled != lastAICommandSettings.enabled
+                || newSettings.aiCommandSettings.clipboardVariantEnabled != lastAICommandSettings.clipboardVariantEnabled
+                || newSettings.aiCommandSettings.clipboardVariantModifier != lastAICommandSettings.clipboardVariantModifier
+                || newSettings.handsFreeSendSettings.binding != lastHandsFreeSendSettings.binding
+                || newSettings.handsFreeSendSettings.enabled != lastHandsFreeSendSettings.enabled
+                || newSettings.setupProgress != lastSetupProgress
+
+            lastKeyCode = newSettings.hotkeyKeyCode
+            lastIsModifier = newSettings.hotkeyIsModifier
+            lastMode = newSettings.recordingMode
+            lastModifierMask = newSettings.hotkeyModifierMask
+
+            if lastAICommandSettings.enabled && !newSettings.aiCommandSettings.enabled {
+                if self.activeVoiceSession?.mode == .aiCommand
+                    || self.aiCommandCaptureCompletionGate.activeCaptureID != nil {
+                    _ = self.cancelRecording()
+                }
+            }
+            if lastHandsFreeSendSettings.enabled && !newSettings.handsFreeSendSettings.enabled,
+               self.activeVoiceSession?.handsFreeSendSession != nil {
+                _ = self.cancelRecording()
+            }
+            lastAICommandSettings = newSettings.aiCommandSettings
+            lastHandsFreeSendSettings = newSettings.handsFreeSendSettings
+            lastSetupProgress = newSettings.setupProgress
+
+            guard hotkeyRelevantChange else { return }
+            AppLog.shared.info("ホットキー設定が変更されました。tapを再作成します（keyCode=\(newSettings.hotkeyKeyCode), isModifier=\(newSettings.hotkeyIsModifier), mode=\(newSettings.recordingMode)）")
+
+            self.hotkeyManager.targetKeyCode = newSettings.hotkeyKeyCode
+            self.hotkeyManager.isModifierKey = newSettings.hotkeyIsModifier
+            self.hotkeyManager.recordingMode = RecordingMode(rawValue: newSettings.recordingMode) ?? .toggle
+            self.hotkeyManager.modifierMaskFromSettings = newSettings.hotkeyModifierMask
+            self.applyAICommandHotkeySettings(newSettings)
+            self.applyHandsFreeSendHotkeySettings(newSettings)
+            self.wireHotkeyCallbacks()
+            if self.didWarmUp {
+                self.hotkeyManager.restart()
+            }
+        }
+        settingsCancellable = AnyObjectHolder(cancellable)
+
+        let dictionaryCancellable = personalDictionaryStore.$loadStatus.sink { [weak self] status in
+            guard let self else { return }
+            if case .recoveryRequired = status {
+                self.storageNotice = "ユーザー辞書を読み込めないため、辞書を使わずに音声入力します。設定のユーザー辞書から復旧してください。"
+                self.offerDictionaryRecoveryIfNeeded()
+            } else if self.storageNotice == "ユーザー辞書を読み込めないため、辞書を使わずに音声入力します。設定のユーザー辞書から復旧してください。" {
+                switch self.inputHistoryStore.loadStatus {
+                case .missing, .ready: self.storageNotice = nil
+                case .malformed, .unreadable: self.noteHistoryStorageFailure()
+                }
+            }
+        }
+        self.dictionaryCancellable = AnyObjectHolder(dictionaryCancellable)
+        let dictionaryRecoveryPhaseCancellable = appState.$phase.sink { [weak self] phase in
+            guard phase == .idle else { return }
+            self?.offerDictionaryRecoveryIfNeeded()
+        }
+        self.dictionaryRecoveryPhaseCancellable = AnyObjectHolder(dictionaryRecoveryPhaseCancellable)
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        invalidateClipboardCancellationRecovery(closeWindow: true)
+        // AppKitがここまで来た時だけ、reply後のteardownに対する締切を武装する。
+        terminationCoordinator.confirmTermination()
+        if OnboardingRuntimeProfile.isDebug {
+            // Debug.appの進捗を保存する。本番のログ・終了処理には触れない。
+            settingsStore.flushPendingSave()
+            return
+        }
+        AppLog.shared.info("ItJustTalks終了処理開始")
+        textInjector.restorePendingScopedClipboardIfOwned()
+        autoStopTask?.cancel()
+        transcriptionEngine.cancelPendingStart()
+        recordingStartTask?.cancel()
+        if let sessionID = activeVoiceSession?.id {
+            dictationCleanup.cancel(operation: sessionID)
+        }
+        recordingStartTimeoutTask?.cancel()
+        aiCommandCaptureTask?.cancel()
+        aiCommandCaptureCompletionGate.revokeAll()
+        aiCommandCaptureTimeoutTask?.cancel()
+        processingTask?.cancel()
+        hotkeyManager?.stop()
+        aiCommandResultWindows.closeAll()
+        settingsStore.flushPendingSave()
+        AppLog.shared.info("ItJustTalks終了")
+    }
+
+    func applicationDidResignActive(_ notification: Notification) {
+        reassertHUDIfAvailable()
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        reassertHUDIfAvailable()
+    }
+
+    /// Debug.appは通常アプリの副作用を止めるためHUDを作らない。
+    /// AppKitのactive通知はその早期return後にも届くので、HUDだけを安全に無視する。
+    private func reassertHUDIfAvailable() {
+        guard RecordingHUDLifecyclePolicy.shouldReassert(
+            isDebug: OnboardingRuntimeProfile.isDebug,
+            hasHUD: hud != nil
+        ), let hud else { return }
+        hud.reassertFrontmostIfVisible()
+    }
+
+    /// 子プロセスのshutdownとAppKit replyは単一のstate machineへ集約する。
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let hasSystemQuitReason = ApplicationTerminationOriginPolicy.hasSystemQuitReason(
+            in: NSAppleEventManager.shared().currentAppleEvent
+        )
+        let isUserInitiated = ApplicationTerminationOriginPolicy.isUserInitiated(
+            hasSystemQuitReason: hasSystemQuitReason
+        )
+        if !didLogTerminationOrigin {
+            AppLog.shared.info("[Termination] origin=\(isUserInitiated ? "user" : "system")")
+            didLogTerminationOrigin = true
+        }
+        return terminationCoordinator.request(
+            isUserInitiated: isUserInitiated
+        )
+    }
+
+    // MARK: - 録音パイプライン
+
+    private func handleAICommandStart(_ inputSource: AICommandInputSource) {
+        guard appState.phase == .idle else {
+            showBusyMessage()
+            return
+        }
+        startAICommandRecording(inputSource: inputSource)
+    }
+
+    private func handleAICommandStop() -> Bool {
+        guard appState.phase == .recording, activeVoiceSession?.mode == .aiCommand else { return false }
+        stopRecordingAndProcess()
+        return true
+    }
+
+    private func handleHandsFreeSendStart() {
+        let settings = settingsStore.settings
+        guard settings.handsFreeSendSettings.enabled,
+              settings.setupProgress.isComplete else { return }
+        guard appState.phase == .idle else {
+            showBusyMessage()
+            return
+        }
+        guard canStartRecordingOutsideSecureInput() else { return }
+        guard allowRecordingWhileSpeechLanguageReady() else { return }
+
+        invalidateAICommandFailureDismissal()
+        appState.setPhase(.starting)
+        hud.clearAICommandState()
+        hud.show()
+
+        // 設定値（トリガー句・STT言語・外部互換の可否）は開始時点で固定する。
+        // 録音中に設定を変えても、その録音の判定は開始時のまま一貫させる。
+        //
+        // 貼り付け先は開始時にも取っておくが、**権威は停止時の取り直し**にある
+        // （`stopRecordingAndProcess`）。ここで取る値は、万一停止経路が取り直しを
+        // 行わなかった場合に備えた控えでしかない。
+        let snapshot = HandsFreeSendSnapshot(
+            settings: settings.handsFreeSendSettings,
+            sttLanguage: settings.languagePreferences.sttLanguage,
+            externalCompatibilityEnabledAtRecordingStart: settings.externalAppCompatibilitySettings.enabled,
+            normalModeCustomInstruction: settings.customInstruction
+        )
+        let session = VoiceSession(
+            mode: .voiceInput,
+            handsFreeSendSnapshot: snapshot,
+            externalCompatibilityEnabledAtRecordingStart: settings.externalAppCompatibilitySettings.enabled,
+            scopedClipboardFallbackAllowedAtRecordingStart: settings.externalAppCompatibilitySettings.allowScopedClipboardFallback,
+            cleanupEnabledAtRecordingStart: settings.cleanupEnabled,
+            normalPasteTarget: NormalPasteTarget.capture(),
+            insertionDestination: InsertionDestination.capture()
+        )
+        if pendingHandsFreeSendRevocation {
+            pendingHandsFreeSendRevocation = false
+            session.handsFreeSendSession?.revokeSendAuthorization()
+            AppLog.shared.warn("開始直前にevent tapが無効化されていたため、このsessionでは擬似送信しません")
+        }
+        beginRecording(session: session)
+    }
+
+    /// tapコールバックから同期的に呼べる軽量判定。イベントを消費するかだけを決める。
+    /// 実際の停止処理は次のmain loopへ逃がし、tapを塞がない。
+    private func canHandleHandsFreeSendStop() -> Bool {
+        appState.phase == .recording
+            && activeVoiceSession?.handsFreeSendSession != nil
+    }
+
+    private func handleHandsFreeSendStop() -> Bool {
+        guard appState.phase == .recording,
+              let session = activeVoiceSession,
+              session.handsFreeSendSession != nil else {
+            return false
+        }
+        return requestHandsFreeSendStop(
+            for: session,
+            intent: .send,
+            evidence: .stopHotkey
+        )
+    }
+
+    private func handleHandsFreeSendPartialText(
+        _ partialText: String,
+        streamID: UUID,
+        isFinal: Bool
+    ) {
+        guard appState.phase == .recording,
+              let session = activeVoiceSession,
+              let handsFreeSession = session.handsFreeSendSession,
+              handsFreeSession.snapshot.streamID == streamID else {
+            return
+        }
+
+        switch handsFreeSession.observePartial(partialText, isFinal: isFinal) {
+        case .none:
+            if handsFreeSession.lastObservationCollapsed {
+                AppLog.shared.info(String(
+                    format: "[Telemetry] hfs_trigger_state state=none elapsedMs=%.0f collapseCount=%d",
+                    handsFreeSendElapsedMs(for: handsFreeSession),
+                    handsFreeSession.candidateCollapseCount
+                ))
+            }
+            clearHandsFreeSendTriggerCandidate()
+            // 候補が崩れたら、録音継続中であることが分かる通常のハンズフリー波形へ戻す。
+            hud.showHandsFreeSendState(.recording)
+        case .ready:
+            _ = requestHandsFreeSendStop(
+                for: session,
+                intent: .send,
+                evidence: .voiceTrigger
+            )
+        case .pending(let pending):
+            if handsFreeSession.lastObservationWasFreshCandidate {
+                AppLog.shared.info(String(
+                    format: "[Telemetry] hfs_trigger_state state=pending elapsedMs=%.0f",
+                    handsFreeSendElapsedMs(for: handsFreeSession)
+                ))
+            }
+            // 安定判定はまだだが、候補を検出した事実は即時に見せる。ここで録音や
+            // 挿入を開始しないため、発話継続時の誤送信リスクは増やさない。
+            hud.showHandsFreeSendState(.triggerCandidate)
+            scheduleHandsFreeSendTriggerCheck(
+                for: session,
+                candidate: pending.candidate,
+                deadline: pending.deadline
+            )
+        }
+    }
+
+    /// 録音開始からの経過ms。計測ログ専用（判定には使わない）。
+    private func handsFreeSendElapsedMs(for handsFreeSession: HandsFreeSendSession, now: Date = Date()) -> Double {
+        guard let recordingStartedAt = handsFreeSession.recordingStartedAt else { return 0 }
+        return now.timeIntervalSince(recordingStartedAt) * 1_000
+    }
+
+    private func scheduleHandsFreeSendTriggerCheck(
+        for session: VoiceSession,
+        candidate: HandsFreeSendPartialTriggerCandidate,
+        deadline: Date
+    ) {
+        // partial全文が更新されたら以前のtimerを差し替える。句読点・空白だけの更新では
+        // fingerprint由来のdeadlineを維持し、350msの安定時間をやり直さない。
+        clearHandsFreeSendTriggerCandidate()
+        let taskID = UUID()
+        handsFreeSendTriggerTaskID = taskID
+        let delay = max(0, deadline.timeIntervalSinceNow)
+        handsFreeSendTriggerTask = Task { @MainActor [weak self] in
+            let sleepStartedAt = Date()
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            let sleepResumedAt = Date()
+            let plannedDelayMs = delay * 1_000
+            let actualElapsedMs = sleepResumedAt.timeIntervalSince(sleepStartedAt) * 1_000
+            AppLog.shared.info(String(
+                format: "[Telemetry] hfs_timer_overshoot plannedMs=%.1f actualMs=%.1f overshootMs=%.1f",
+                plannedDelayMs,
+                actualElapsedMs,
+                actualElapsedMs - plannedDelayMs
+            ))
+            guard !Task.isCancelled,
+                  let self,
+                  self.handsFreeSendTriggerTaskID == taskID,
+                  self.activeVoiceSession?.id == session.id,
+                  self.appState.phase == .recording,
+                  let handsFreeSession = session.handsFreeSendSession,
+                  handsFreeSession.isPendingCandidateCurrent(
+                      candidate,
+                      for: self.transcriptionEngine.partialText
+                  ) else {
+                return
+            }
+            // 現在のtimerだけを解放する。partialが直前に更新されていれば、新しいtimerを
+            // 誤って消さないためtokenを確認してからnil化する。
+            self.handsFreeSendTriggerTask = nil
+            self.handsFreeSendTriggerTaskID = nil
+
+            // deadline到達を新しい音声partialとして扱わない。ASR callbackだけが候補の
+            // 安定窓を更新できるようにし、timer再評価による余分な遅延も防ぐ。
+            switch handsFreeSession.reevaluatePendingCandidate(
+                candidate,
+                for: self.transcriptionEngine.partialText
+            ) {
+            case .ready:
+                _ = self.requestHandsFreeSendStop(
+                    for: session,
+                    intent: .send,
+                    evidence: .voiceTrigger
+                )
+            case .pending(let pending):
+                self.scheduleHandsFreeSendTriggerCheck(
+                    for: session,
+                    candidate: pending.candidate,
+                    deadline: pending.deadline
+                )
+            case .none:
+                self.clearHandsFreeSendTriggerCandidate()
+            }
+        }
+    }
+
+    private func clearHandsFreeSendTriggerCandidate() {
+        handsFreeSendTriggerTask?.cancel()
+        handsFreeSendTriggerTask = nil
+        handsFreeSendTriggerTaskID = nil
+    }
+
+    @discardableResult
+    private func requestHandsFreeSendStop(
+        for session: VoiceSession,
+        intent: HandsFreeSendSession.StopIntent,
+        evidence: HandsFreeSendSession.StopEvidence
+    ) -> Bool {
+        guard activeVoiceSession?.id == session.id,
+              appState.phase == .recording,
+              let handsFreeSession = session.handsFreeSendSession,
+              handsFreeSession.claimStop(intent: intent, evidence: evidence) else {
+            return false
+        }
+        if evidence == .voiceTrigger {
+            // final callbackが空、またはトリガーを安全に除去できない場合でも、
+            // 自動挿入・送信をせずユーザーが確認できるpartialを残す。
+            handsFreeSession.captureVoiceTriggerFallbackTranscript(transcriptionEngine.partialText)
+            // 検出の速さを体感でしか判断できなかったため、測れるようにする。
+            if let metrics = handsFreeSession.detectionMetrics() {
+                AppLog.shared.info(String(
+                    format: "音声トリガー検出: 候補確認から%.2f秒, partial観測%d回",
+                    metrics.elapsedSeconds,
+                    metrics.observations
+                ))
+            }
+            // セッション全体の内訳。ここでのみ中央値算出・文字列整形を行う（計測専用）。
+            AppLog.shared.info(String(
+                format: "[Telemetry] hfs_trigger_accepted totalMs=%.0f sinceFirstCandidateMs=%.0f "
+                    + "collapseCount=%d volatileCount=%d volatileIntervalMedianMs=%.0f",
+                handsFreeSendElapsedMs(for: handsFreeSession),
+                handsFreeSession.elapsedMillisSinceFirstCandidateDetected() ?? -1,
+                handsFreeSession.candidateCollapseCount,
+                handsFreeSession.volatileObservationCount,
+                handsFreeSession.volatileIntervalMedianMillis() ?? -1
+            ))
+        }
+        clearHandsFreeSendTriggerCandidate()
+        if intent == .send {
+            // 350msの安定判定は既に通過している。ここで収束アニメーションを待つと、
+            // 実処理が始まっているのに「まだ反応していない」ように見える。音声トリガー
+            // の受理とAI整形を同時に示す状態へ直ちに遷移する。
+            hud.showHandsFreeSendState(
+                evidence == .voiceTrigger ? .triggerConfirmedProcessing : .processing
+            )
+        } else {
+            hud.clearHandsFreeSendState()
+        }
+        stopRecordingAndProcess()
+        return true
+    }
+
+    /// トグル/hold両モードに対応するハンドラ。recordingModeによって分岐する。
+    /// - toggle: .idle→録音開始、.recording→停止して処理へ、それ以外はHUDに「処理中」表示
+    /// - hold: 従来通りhandleHotkeyDown/onKeyUp経由のstopRecordingAndProcessに任せる
+    private func handleHotkeyTogglePress() {
+        // ハンズフリー録音中は一切アニメーションを動かさない。波形とボタンが一瞬
+        // 置き換わると録音が止まったように見えて非常に紛らわしい。
+        if activeVoiceSession?.handsFreeSendSession != nil { return }
+        if activeVoiceSession?.mode == .aiCommand {
+            showBusyMessage()
+            return
+        }
+        switch appState.phase {
+        case .idle:
+            startRecording()
+        case .recording:
+            stopRecordingAndProcess()
+        case .error:
+            appState.setPhase(.idle)
+            startRecording()
+        case .starting, .transcribing, .cleaning, .inserting:
+            showBusyMessage()
+        }
+    }
+
+    /// ホットキーkeyDown時の分岐（holdモード用）:
+    /// - idle: 録音開始
+    /// - error: idleへ復帰してから録音開始（ロックアウト防止）
+    /// - それ以外（transcribing/cleaning/inserting）: 「処理中です」を短く表示するのみ
+    private func handleHotkeyDown() {
+        if activeVoiceSession?.handsFreeSendSession != nil { return }
+        if activeVoiceSession?.mode == .aiCommand {
+            showBusyMessage()
+            return
+        }
+        switch appState.phase {
+        case .idle:
+            pendingNormalHold = true
+            startRecording()
+        case .error:
+            appState.setPhase(.idle)
+            pendingNormalHold = true
+            startRecording()
+        case .recording:
+            break
+        case .starting, .transcribing, .cleaning, .inserting:
+            showBusyMessage()
+        }
+    }
+
+    /// holdモードのキー解放時。録音中のみ停止処理へ進む。
+    private func handleHotkeyUp() {
+        pendingNormalHold = false
+        if activeVoiceSession?.handsFreeSendSession != nil { return }
+        if appState.phase == .starting, activeVoiceSession?.mode == .voiceInput {
+            _ = cancelRecording()
+            return
+        }
+        guard appState.phase == .recording, activeVoiceSession?.mode == .voiceInput else { return }
+        stopRecordingAndProcess()
+    }
+
+    /// event tap再起動やキー設定開始で、押下状態を追跡できなくなった通常モードの長押し録音だけを中断する。
+    private func cancelInterruptedNormalHoldRecording() {
+        guard pendingNormalHold else { return }
+        pendingNormalHold = false
+        _ = cancelRecording()
+    }
+
+    /// phaseを変えずにHUDへ短いbusyアニメーションを表示する（無反応をなくすためのフィードバック）。
+    private func showBusyMessage() {
+        hud.flashBusy()
+    }
+
+    @discardableResult
+    private func allowRecordingWhileSpeechLanguageReady() -> Bool {
+        guard !speechLanguagePreparationCoordinator.state.isPreparing,
+              !isApplyingLanguageProfile else {
+            hud.flashError(
+                message: uiText("音声モデルを準備しています。完了してからもう一度録音を開始してください。")
+            )
+            return false
+        }
+        return true
+    }
+
+    /// 整形失敗をメニューバーで一時警告する（挿入自体は成功しているため塗りなしアイコン）。
+    private func flashMenuBarWarning(seconds: Double = 8) {
+        menuBarWarningTask?.cancel()
+        menuBarIconName = "exclamationmark.triangle"
+        menuBarWarningTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            guard !Task.isCancelled, let self, self.appState.phase == .idle else { return }
+            self.menuBarIconName = "mic"
+        }
+    }
+
+    /// .errorフェーズの表示（3秒自動復帰）を妨げないよう、復帰後にHUDを閉じる。
+    private func scheduleHUDHideAfterError(seconds: Double = 3.2) {
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            guard let self, self.appState.phase == .idle else { return }
+            self.hud.hide()
+        }
+    }
+
+    private func finishRecordingFromHUD() {
+        guard appState.phase == .recording else {
+            showBusyMessage()
+            return
+        }
+        if let session = activeVoiceSession,
+           session.handsFreeSendSession != nil {
+            _ = requestHandsFreeSendStop(
+                for: session,
+                intent: .insertOnly,
+                evidence: .hudFinish
+            )
+            return
+        }
+        stopRecordingAndProcess()
+    }
+
+    private func cancelRecordingFromHUD() {
+        if !cancelRecording() {
+            showBusyMessage()
+        }
+    }
+
+    /// tapコールバックから同期的に呼べる軽量判定。イベントを消費するかだけを決める。
+    /// **`cancelRecording()` が true を返す条件と一致させること。**
+    ///
+    /// 判定と実処理の間に状態が変わると、消費だけして何も起きない場合がある。
+    /// Escで消費し損ねるより無害で、`onHandsFreeSendToggle` も同じ性質を持つ。
+    private func canCancelWithEscape() -> Bool {
+        if aiCommandFailureOwnership.isPresented { return true }
+        switch appState.phase {
+        case .recording, .starting, .transcribing, .cleaning, .inserting:
+            return true
+        case .idle, .error:
+            return false
+        }
+    }
+
+    @discardableResult
+    private func cancelRecording() -> Bool {
+        // M5の失敗HUDはAppStateのphaseと独立して所有する。
+        // 一般errorの自動復帰後でもEscで必ず閉じられる。
+        if aiCommandFailureOwnership.isPresented {
+            pendingNormalHold = false
+            activeVoiceSession?.cancel()
+            processingTask?.cancel()
+            aiCommandService.cancelAll()
+            dismissAICommandFailure()
+            return true
+        }
+
+        switch appState.phase {
+        case .recording:
+            break
+        case .transcribing, .cleaning, .inserting:
+            return cancelProcessing()
+        case .starting:
+            pendingNormalHold = false
+            clearHandsFreeSendTriggerCandidate()
+            aiCommandCaptureCompletionGate.authorizeUserCancellation()
+            aiCommandCaptureTask?.cancel()
+            aiCommandCaptureTask = nil
+            clearAICommandCaptureTimeout()
+            transcriptionEngine.cancelPendingStart(streamID: activeVoiceSession?.id)
+            activeVoiceSession?.cancel()
+            if let sessionID = activeVoiceSession?.id {
+                dictationCleanup.cancel(operation: sessionID)
+            }
+            recordingStartTask?.cancel()
+            recordingStartTask = nil
+            recordingStartTaskSessionID = nil
+            clearRecordingStartTimeout()
+            activeVoiceSession = nil
+            appState.setPhase(.idle)
+            hud.clearAICommandState()
+            hud.clearHandsFreeSendState()
+            hud.hide()
+            return true
+        case .idle, .error:
+            return false
+        }
+
+        let cancelledSession = activeVoiceSession
+        clearPendingNormalHoldState()
+        clearHandsFreeSendTriggerCandidate()
+        clearRecordingStartTimeout(for: cancelledSession)
+        cancelledSession?.cancel()
+        if let sessionID = cancelledSession?.id {
+            dictationCleanup.cancel(operation: sessionID)
+        }
+        autoStopTask?.cancel()
+        autoStopTask = nil
+        menuBarIconName = "mic"
+        appState.recordingStartedAt = nil
+        appState.setPhase(.transcribing)
+        AppLog.shared.info("録音キャンセル")
+
+        Task {
+            let recordingFailure = audioRecorder.recordingFailure
+            await audioRecorder.stop()
+            if let streamID = cancelledSession?.handsFreeSendSession?.snapshot.streamID ?? cancelledSession?.id {
+                var stopped = await transcriptionEngine.stopStreamingResult(streamID: streamID)
+                stopped.audioLost = recordingFailure.hasFailed
+                let stopFlags = (timedOut: stopped.timedOut, recognitionFailed: stopped.recognitionFailed,
+                                 unfinalizedTail: stopped.hasUnfinalizedTail, audioLost: stopped.audioLost)
+                AppLog.shared.info("[Telemetry] transcription_stop timedOut=\(stopFlags.timedOut) recognitionFailed=\(stopFlags.recognitionFailed) unfinalizedTail=\(stopFlags.unfinalizedTail) audioLost=\(stopFlags.audioLost)")
+                // 取消した発話の原文（未確定末尾を含む）を、メニューから一定時間回収できるようにする。
+                if let cancelledSession, cancelledSession.mode == .voiceInput {
+                    lastOriginalTranscript.remember(stopped.fullText, sessionID: cancelledSession.id)
+                }
+            }
+            if self.activeVoiceSession?.id == cancelledSession?.id {
+                self.activeVoiceSession = nil
+            }
+            appState.setPhase(.idle)
+            hud.clearAICommandState()
+            hud.clearHandsFreeSendState()
+            hud.hide()
+        }
+        return true
+    }
+
+    private func cancelProcessing() -> Bool {
+        let cancelledSession = activeVoiceSession
+        clearPendingNormalHoldState()
+        clearHandsFreeSendTriggerCandidate()
+        cancelledSession?.cancel()
+        if let cancelledSession, cancelledSession.mode == .voiceInput {
+            // 取消後に整形結果が届いても挿入・送信しない（STATE-08）。
+            dictationCleanup.cancel(operation: cancelledSession.id)
+        }
+        if let cancelledSession, cancelledSession.mode == .aiCommand {
+            // 取消後にAIの結果が届いても、置換・挿入・表示しない（STATE-08）。
+            aiCommandService.cancel(operation: cancelledSession.id)
+        }
+        let cancelledTask = processingTask
+        autoStopTask?.cancel()
+        autoStopTask = nil
+        cancelledTask?.cancel()
+        hud.clearChunkProgress()
+        menuBarIconName = "mic"
+        appState.recordingStartedAt = nil
+        AppLog.shared.info("処理キャンセル")
+
+        Task {
+            await audioRecorder.stop()
+            if let streamID = cancelledSession?.handsFreeSendSession?.snapshot.streamID ?? cancelledSession?.id {
+                _ = await transcriptionEngine.stopStreaming(streamID: streamID)
+            }
+            await cancelledTask?.value
+            if let cancelledSession, let original = cancelledSession.recoverableOriginalTranscript {
+                lastOriginalTranscript.remember(original, sessionID: cancelledSession.id)
+            }
+            guard self.activeVoiceSession == nil
+                    || self.activeVoiceSession?.id == cancelledSession?.id else { return }
+            if self.activeVoiceSession?.id == cancelledSession?.id {
+                self.activeVoiceSession = nil
+            }
+            appState.setPhase(.idle)
+            hud.clearAICommandState()
+            hud.clearHandsFreeSendState()
+            hud.hide()
+        }
+        return true
+    }
+
+    private func clearPendingNormalHoldState() {
+        pendingNormalHold = false
+    }
+
+    private func startRecording() {
+        guard appState.phase == .idle else { return }
+        guard canStartRecordingOutsideSecureInput() else { return }
+        guard allowRecordingWhileSpeechLanguageReady() else { return }
+        invalidateAICommandFailureDismissal()
+        appState.setPhase(.starting)
+        hud.clearAICommandState()
+        hud.show()
+        let settings = settingsStore.settings
+        beginRecording(session: VoiceSession(
+            mode: .voiceInput,
+            externalCompatibilityEnabledAtRecordingStart: settings.externalAppCompatibilitySettings.enabled,
+            scopedClipboardFallbackAllowedAtRecordingStart: settings.externalAppCompatibilitySettings.allowScopedClipboardFallback,
+            cleanupEnabledAtRecordingStart: settings.cleanupEnabled
+        ))
+    }
+
+    private func startAICommandRecording(
+        expectedFrontmostProcessIdentifier: pid_t? = nil,
+        inputSource: AICommandInputSource
+    ) {
+        let settings = settingsStore.settings
+        guard settings.aiCommandSettings.enabled,
+              settings.setupProgress.isComplete,
+              appState.phase == .idle else { return }
+        guard canStartRecordingOutsideSecureInput() else { return }
+        guard allowRecordingWhileSpeechLanguageReady() else { return }
+        guard ExternalCompatibilityFocusReturnPolicy.canResume(
+            expectedProcessIdentifier: expectedFrontmostProcessIdentifier,
+            currentProcessIdentifier: NSWorkspace.shared.frontmostApplication?.processIdentifier
+        ) else {
+            // The compatibility-consent panel must never turn an uncertain
+            // focus return into an automatic general-question recording.
+            if inputSource == .clipboard, expectedFrontmostProcessIdentifier != nil {
+                presentAICommandClipboardRecoveryFocusFailure()
+            } else {
+                presentAICommandCaptureGuidance(
+                    for: .focusedElementUnavailable,
+                    inputSource: inputSource,
+                    allowsClipboardRecovery: false
+                )
+            }
+            return
+        }
+        invalidateClipboardCancellationRecovery(closeWindow: true)
+        aiCommandCaptureCompletionGate.revokeAll()
+        invalidateAICommandFailureDismissal()
+        appState.setPhase(.starting)
+        // 新しい指示を始めた時点で前回の控えを捨てる。残すとメニューの
+        // 「最後のAI出力をコピー」が、その後に実行した別の指示の結果ではなく
+        // 古い出力を指したままになる。
+        lastAICommandOutput = nil
+        // 色・外枠・読み上げで入力源が分かるよう、最初の表示より前に渡す。
+        hud.setAICommandInputSource(inputSource)
+        hud.showAICommandState(.processing)
+
+        // クリップボード入力源は同期で即座に終わるため、選択取得の非同期Task・
+        // captureID・タイムアウトのどれも使わない。
+        if inputSource == .clipboard {
+            // クリップボードをモデルへ渡す同意を、実際に読む直前でもう一度確かめる。
+            // `aiCommandClipboardModifier`は同意済みの時しか設定されないので現状は
+            // 到達しないが、同意の検査を読み取り地点から離すと、呼び出し元が増えた時に
+            // 不変条件が静かに壊れる。
+            guard settings.aiCommandSettings.clipboardVariantEnabled else {
+                AppLog.shared.warn("AIに指示のクリップボード入力は未同意のため中止")
+                appState.setPhase(.idle)
+                hud.clearAICommandState()
+                hud.hide()
+                return
+            }
+            let decision = clipboardSourceReader.read()
+            switch decision {
+            case .text(let text):
+                beginRecording(session: VoiceSession(
+                    mode: .aiCommand,
+                    selectedText: text,
+                    inputSource: inputSource,
+                    aiCommandSettings: settings.aiCommandSettings,
+                    externalCompatibilityEnabledAtRecordingStart: settingsStore.settings.externalAppCompatibilitySettings.enabled,
+                    aiCommandExplicitInsertionAllowedAtRecordingStart: aiCommandExplicitInsertionAllowedAtCurrentSettings(),
+                    scopedClipboardFallbackAllowedAtRecordingStart: settingsStore.settings.externalAppCompatibilitySettings.allowScopedClipboardFallback,
+                    cleanupEnabledAtRecordingStart: settings.cleanupEnabled
+                ))
+                AppLog.shared.info("[Telemetry] ai_command_clipboard_read result=ok characters=\(text.count)")
+            case .empty, .nonText, .rejectedSecureInput, .rejectedConcealed, .rejectedSelfGenerated, .tooLong:
+                let reasonCode = aiCommandClipboardReasonCode(for: decision)
+                AppLog.shared.warn("AIに指示のクリップボード読み取りを安全に中止: reason=\(reasonCode)")
+                AppLog.shared.info("[Telemetry] ai_command_clipboard_read result=\(reasonCode)")
+                presentAICommandClipboardCaptureGuidance(for: decision)
+            }
+            return
+        }
+
+        let captureID = UUID()
+        let captureLease = aiCommandCaptureCompletionGate.begin(id: captureID)
+        aiCommandCaptureTask?.cancel()
+        clearAICommandCaptureTimeout()
+        scheduleAICommandCaptureTimeout(for: captureID)
+        aiCommandCaptureTask = Task {
+            defer {
+                if self.aiCommandCaptureCompletionGate.activeCaptureID == captureID {
+                    self.aiCommandCaptureCompletionGate.finishIfCurrent(captureLease)
+                    self.aiCommandCaptureTask = nil
+                }
+                self.clearAICommandCaptureTimeout(for: captureID)
+            }
+            let capture = await selectedTextCapture.capture(
+                allowingExternalCompatibility: settingsStore.settings.externalAppCompatibilitySettings.enabled
+            )
+            switch aiCommandCaptureCompletionGate.classify(
+                capture,
+                lease: captureLease,
+                appIsIdle: appState.phase == .idle
+            ) {
+            case .recovery(let receipt):
+                presentClipboardCancellationRecovery(receipt)
+                return
+            case .stale:
+                return
+            case .current:
+                break
+            }
+            guard appState.phase == .starting,
+                  settingsStore.settings.aiCommandSettings.enabled,
+                  settingsStore.settings.setupProgress.isComplete else {
+                if appState.phase == .starting {
+                    appState.setPhase(.idle)
+                    hud.clearAICommandState()
+                    hud.hide()
+                }
+                return
+            }
+            aiCommandCaptureCompletionGate.finishIfCurrent(captureLease)
+            aiCommandCaptureTask = nil
+            clearAICommandCaptureTimeout(for: captureID)
+            switch capture {
+            case .selected(let context):
+                beginRecording(session: VoiceSession(
+                    mode: .aiCommand,
+                    selectedText: context.text,
+                    inputSource: inputSource,
+                    selectionCaptureMethod: context.captureMethod,
+                    aiCommandSettings: settings.aiCommandSettings,
+                    externalCompatibilityEnabledAtRecordingStart: settingsStore.settings.externalAppCompatibilitySettings.enabled,
+                    aiCommandExplicitInsertionAllowedAtRecordingStart: aiCommandExplicitInsertionAllowedAtCurrentSettings(),
+                    scopedClipboardFallbackAllowedAtRecordingStart: settingsStore.settings.externalAppCompatibilitySettings.allowScopedClipboardFallback,
+                    cleanupEnabledAtRecordingStart: settings.cleanupEnabled
+                ))
+            case .none:
+                beginRecording(session: VoiceSession(
+                    mode: .aiCommand,
+                    inputSource: inputSource,
+                    aiCommandSettings: settings.aiCommandSettings,
+                    externalCompatibilityEnabledAtRecordingStart: settingsStore.settings.externalAppCompatibilitySettings.enabled,
+                    aiCommandExplicitInsertionAllowedAtRecordingStart: aiCommandExplicitInsertionAllowedAtCurrentSettings(),
+                    scopedClipboardFallbackAllowedAtRecordingStart: settingsStore.settings.externalAppCompatibilitySettings.allowScopedClipboardFallback,
+                    cleanupEnabledAtRecordingStart: settings.cleanupEnabled
+                ))
+            case .tooLong(_, let maximum):
+                appState.setPhase(.idle)
+                hud.clearAICommandState()
+                hud.hide()
+                aiCommandResultWindows.show(AICommandResultPayload(
+                    spokenInstruction: "",
+                    selectedText: nil,
+                    answer: uiFormat(
+                        "選択したテキストが%d文字を超えています。選択範囲を短くして、もう一度指示してください。",
+                        maximum
+                    ),
+            title: uiText("AIに指示モード")
+                ))
+            case .unavailable(let failure):
+                presentAICommandCaptureGuidance(for: failure, inputSource: inputSource)
+            case .cancelledTemporaryCopy(let receipt):
+                receipt.invalidate()
+            }
+        }
+    }
+
+    private func presentClipboardCancellationRecovery(_ receipt: ClipboardCancellationReceipt) {
+        invalidateClipboardCancellationRecovery(closeWindow: true)
+        guard receipt.isUsable(), appState.phase == .idle else {
+            receipt.invalidate()
+            return
+        }
+        pendingClipboardCancellationReceipt = receipt
+        let payload = AICommandResultPayload(
+            spokenInstruction: "",
+            selectedText: nil,
+            answer: uiText("選択取得を中断したため、コピー前のクリップボードへ戻すか選べます。内容は表示・保存しません。"),
+            title: "クリップボードの復旧",
+            showsCopyButton: false,
+            actions: [
+                AICommandResultAction(
+                    id: "restore_clipboard",
+                    title: "コピー前の状態へ戻す",
+                    style: .primary,
+                    handler: { [weak self, weak receipt] in
+                        guard let receipt else { return }
+                        self?.resolveClipboardCancellationRecovery(receipt, restoreOriginal: true)
+                    }
+                ),
+                AICommandResultAction(
+                    id: "preserve_clipboard",
+                    title: "現在の状態を保持",
+                    style: .secondary,
+                    handler: { [weak self, weak receipt] in
+                        guard let receipt else { return }
+                        self?.resolveClipboardCancellationRecovery(receipt, restoreOriginal: false)
+                    }
+                ),
+            ],
+            presentation: .nonactivatingConfirmation,
+            onDismiss: { [weak self, weak receipt] in
+                guard let receipt else { return }
+                self?.discardClipboardCancellationRecovery(receipt)
+            }
+        )
+        pendingClipboardCancellationWindowID = payload.id
+        pendingClipboardCancellationExpiryTask = Task { @MainActor [weak self, weak receipt] in
+            do {
+                try await Task.sleep(nanoseconds: UInt64(ClipboardCancellationReceipt.lifetimeSeconds * 1_000_000_000))
+            } catch {
+                return
+            }
+            guard let self, let receipt, self.pendingClipboardCancellationReceipt === receipt else { return }
+            self.invalidateClipboardCancellationRecovery(closeWindow: true)
+        }
+        aiCommandResultWindows.show(payload)
+    }
+
+    private func resolveClipboardCancellationRecovery(
+        _ receipt: ClipboardCancellationReceipt,
+        restoreOriginal: Bool
+    ) {
+        guard pendingClipboardCancellationReceipt === receipt else { return }
+        let resolution = receipt.resolve(restoreOriginal: restoreOriginal)
+        pendingClipboardCancellationReceipt = nil
+        pendingClipboardCancellationWindowID = nil
+        pendingClipboardCancellationExpiryTask?.cancel()
+        pendingClipboardCancellationExpiryTask = nil
+        guard resolution == .clipboardChanged || resolution == .restoreFailed else { return }
+        let message: String
+        if resolution == .clipboardChanged {
+            message = uiText("クリップボードがその後変更されたため、上書きせず現在の状態を保持しました。")
+        } else {
+            message = uiText("コピー前の状態へ戻せたことを確認できませんでした。クリップボードの内容を確認してください。")
+        }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.aiCommandResultWindows.show(AICommandResultPayload(
+                spokenInstruction: "",
+                selectedText: nil,
+                answer: message,
+                title: "クリップボードの復旧",
+                showsCopyButton: false,
+                presentation: .nonactivatingConfirmation
+            ))
+        }
+    }
+
+    private func discardClipboardCancellationRecovery(_ receipt: ClipboardCancellationReceipt) {
+        guard pendingClipboardCancellationReceipt === receipt else { return }
+        invalidateClipboardCancellationRecovery(closeWindow: false)
+    }
+
+    private func invalidateClipboardCancellationRecovery(closeWindow: Bool) {
+        let windowID = pendingClipboardCancellationWindowID
+        pendingClipboardCancellationReceipt?.invalidate()
+        pendingClipboardCancellationReceipt = nil
+        pendingClipboardCancellationWindowID = nil
+        pendingClipboardCancellationExpiryTask?.cancel()
+        pendingClipboardCancellationExpiryTask = nil
+        if closeWindow, let windowID {
+            aiCommandResultWindows.dismiss(id: windowID)
+        }
+    }
+
+    /// 選択取得が曖昧だった案内で利用者が明示的に選んだ場合だけ、
+    /// 再キャプチャせず「選択なし」のAI質問を開始する。
+    ///
+    /// `inputSource`は暗黙の既定に頼らず、案内を出した元のsessionから明示的に受け取る。
+    /// 本文を持たない一般質問でも、利用者が音声で明示した届け先だけは別の安全経路で
+    /// 処理できる。暗黙に`.selection`へ落とすと、sourceの有無と届け先の意味が混ざるため、
+    /// 元の入力sourceを明示的に保持する。
+    private func startAICommandRecordingWithoutSelection(inputSource: AICommandInputSource) {
+        let settings = settingsStore.settings
+        guard settings.aiCommandSettings.enabled,
+              settings.setupProgress.isComplete,
+              appState.phase == .idle else { return }
+        guard canStartRecordingOutsideSecureInput() else { return }
+        guard allowRecordingWhileSpeechLanguageReady() else { return }
+        invalidateAICommandFailureDismissal()
+        appState.setPhase(.starting)
+        hud.setAICommandInputSource(inputSource)
+        hud.showAICommandState(.processing)
+        beginRecording(session: VoiceSession(
+            mode: .aiCommand,
+            inputSource: inputSource,
+            aiCommandSettings: settings.aiCommandSettings,
+            externalCompatibilityEnabledAtRecordingStart: settingsStore.settings.externalAppCompatibilitySettings.enabled,
+            aiCommandExplicitInsertionAllowedAtRecordingStart: aiCommandExplicitInsertionAllowedAtCurrentSettings(),
+            scopedClipboardFallbackAllowedAtRecordingStart: settingsStore.settings.externalAppCompatibilitySettings.allowScopedClipboardFallback,
+            cleanupEnabledAtRecordingStart: settings.cleanupEnabled
+        ))
+    }
+
+    private func scheduleAICommandCaptureTimeout(for captureID: UUID) {
+        aiCommandCaptureTimeoutTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 12_000_000_000)
+            guard !Task.isCancelled,
+                  let self,
+                  self.aiCommandCaptureCompletionGate.activeCaptureID == captureID,
+                  self.appState.phase == .starting else { return }
+            AppLog.shared.warn("AIに指示の選択取得が12秒以内に完了しなかったため中断します")
+            self.aiCommandCaptureTask?.cancel()
+            self.aiCommandCaptureCompletionGate.revokeActive(id: captureID)
+            self.aiCommandCaptureTask = nil
+            self.appState.setPhase(.error(self.uiText("選択テキストの取得がタイムアウトしました")))
+            self.hud.flashError()
+            self.scheduleHUDHideAfterError()
+            self.clearAICommandCaptureTimeout(for: captureID)
+        }
+    }
+
+    private func clearAICommandCaptureTimeout(for captureID: UUID? = nil) {
+        if let captureID,
+           let activeCaptureID = aiCommandCaptureCompletionGate.activeCaptureID,
+           activeCaptureID != captureID {
+            return
+        }
+        aiCommandCaptureTimeoutTask?.cancel()
+        aiCommandCaptureTimeoutTask = nil
+    }
+
+    private func beginRecording(session: VoiceSession) {
+        guard allowRecordingWhileSpeechLanguageReady() else {
+            session.cancel()
+            activeVoiceSession = nil
+            appState.setPhase(.idle)
+            hud.clearAICommandState()
+            hud.clearHandsFreeSendState()
+            return
+        }
+        // 通常・ハンズフリー・AI指示の共通開始点。整形要求を待たず録音へ譲る。
+        instructionOptimizationService.cancelAll(forRecording: true)
+        recordingStartTask?.cancel()
+        clearRecordingStartTimeout()
+        activeVoiceSession = session
+        // 直前の原文は次の録音開始まで（ADD-01）。前回の「未整形」通知もここで消す。
+        lastOriginalTranscript.recordingStarted(sessionID: session.id)
+        dictationNotice = nil
+        recordingStartTaskSessionID = session.id
+        scheduleRecordingStartTimeout(for: session)
+        let recordingRequestedAt = Date()
+        AppLog.shared.info("[Telemetry] recording_requested session=\(session.id.uuidString) mode=\(session.mode.rawValue)")
+
+        // 整形の静的な指示でセッションを録音中に準備しておく（§6.2、要求の1秒以上前）。
+        // **`recordingStartTask` の中に入れない。** あの中はウォームアップとマイク権限を
+        // awaitするため、先回りの意味が薄れる。操作IDに `session.id` を使い、
+        // 整形（`continueNormalPipeline`）と取消が同じ操作を指すようにする。
+        if RecordingStartPrewarmPolicy.shouldPrewarm(
+            mode: session.mode,
+            cleanupEnabled: session.cleanupEnabledAtRecordingStart,
+            aiAvailable: dictationCleanup.availability.isAvailable
+        ) {
+            dictationCleanup.prewarm(
+                operation: session.id,
+                sttLanguage: settingsStore.settings.languagePreferences.sttLanguage
+            )
+        }
+
+        recordingStartTask = Task {
+            defer {
+                if self.recordingStartTaskSessionID == session.id {
+                    self.recordingStartTask = nil
+                    self.recordingStartTaskSessionID = nil
+                }
+            }
+            do {
+                try await waitForWarmUpBeforeRecording()
+            } catch {
+                guard ownsStartingSession(session) else { return }
+                AppLog.shared.warn("音声認識エンジンの準備に失敗しました")
+                finishStartingSessionWithError(
+                    session,
+                    message: uiText("音声認識エンジンを準備できませんでした。権限と音声モデルを確認して、もう一度試してください。")
+                )
+                return
+            }
+
+            guard ownsStartingSession(session) else { return }
+            AppLog.shared.info(String(
+                format: "[Telemetry] recording_speech_ready session=%@ elapsedMs=%.0f",
+                session.id.uuidString,
+                Date().timeIntervalSince(recordingRequestedAt) * 1_000
+            ))
+
+            let granted = await audioRecorder.requestMicrophonePermission()
+            guard ownsStartingSession(session) else { return }
+            guard granted else {
+                finishStartingSessionWithError(session, message: uiText("マイクへのアクセスが許可されていません"))
+                return
+            }
+
+            var didStartStreaming = false
+            do {
+                guard ownsStartingSession(session) else { return }
+                let streamID = session.handsFreeSendSession?.snapshot.streamID ?? session.id
+                // 通常モード・AIに指示では暫定結果の観測が不要。MainActorのホットパスに
+                // 何も載せないため、ハンズフリー送信のsessionだけへ配線する。
+                let partialTextObserver: ((UUID, String, Bool) -> Void)?
+                if session.handsFreeSendSession != nil {
+                    partialTextObserver = { [weak self] resultStreamID, partialText, isFinal in
+                        self?.handleHandsFreeSendPartialText(
+                            partialText,
+                            streamID: resultStreamID,
+                            isFinal: isFinal
+                        )
+                    }
+                } else {
+                    partialTextObserver = nil
+                }
+                let format = try await transcriptionEngine.startStreaming(
+                    streamID: streamID,
+                    // ハンズフリー送信では認識バイアスを掛けない（誤認識のまま送信される経路を増やさない）。
+                    contextualStrings: TranscriptionEngine.contextualStrings(
+                        mode: session.mode, handsFree: session.handsFreeSendSession != nil,
+                        entries: personalDictionaryStore.enabledEntries
+                    ),
+                    onPartialText: partialTextObserver
+                )
+                didStartStreaming = true
+                AppLog.shared.info(String(
+                    format: "[Telemetry] recording_analyzer_ready session=%@ stream=%@ elapsedMs=%.0f",
+                    session.id.uuidString,
+                    streamID.uuidString,
+                    Date().timeIntervalSince(recordingRequestedAt) * 1_000
+                ))
+                guard ownsStartingSession(session) else {
+                    _ = await transcriptionEngine.stopStreaming(streamID: streamID)
+                    return
+                }
+                // AudioRecorderの直列消費TaskはMainActor外で走る。ここで`self`を捕まえて
+                // `appendAudio`（`@MainActor`）を呼ぶとバッファ毎にホップが戻ってしまうため、
+                // その録音のcontinuationに束縛済みで、どのスレッドからでも呼べる受け口を使う。
+                // 直列消費のままなので到着順は保たれる。
+                audioRecorder.onBuffer = transcriptionEngine.makeAudioSink()
+                let appState = self.appState
+                audioRecorder.onLevel = { level in
+                    // 音量表示だけはUI状態なのでMainActorへ戻す必要がある。
+                    // `publishAudioLevel` が間引くので、`@Published` の書き込みと
+                    // それに伴うHUD全体の再評価はバッファ毎には起こらない。
+                    Task { @MainActor in
+                        appState.publishAudioLevel(level, for: session.id)
+                    }
+                }
+                guard ownsStartingSession(session) else {
+                    _ = await transcriptionEngine.stopStreaming(streamID: streamID)
+                    return
+                }
+                guard RecordingStartSafetyPolicy.decision(
+                    isSecureInputEnabled: IsSecureEventInputEnabled()
+                ) == .allow else {
+                    finishStartingSessionWithError(
+                        session,
+                        message: uiText("安全な入力が有効な間は録音を開始できません。パスワード入力などを閉じてから、もう一度試してください。")
+                    )
+                    return
+                }
+                try await audioRecorder.start(
+                    targetFormat: format,
+                    preferredMicrophoneUID: settingsStore.settings.preferredMicrophoneUID,
+                    correlationID: session.id.uuidString
+                )
+                clearRecordingStartTimeout(for: session)
+                appState.recordingStartedAt = Date()
+                appState.setPhase(.recording)
+                appState.beginAudioLevelSession(session.id)
+                menuBarIconName = "mic.fill.badge.plus"
+                if session.mode == .aiCommand {
+                    hud.showAICommandState(.recording)
+                } else if let handsFreeSendSession = session.handsFreeSendSession {
+                    handsFreeSendSession.markRecordingStarted()
+                    hud.showHandsFreeSendState(.recording)
+                } else {
+                    hud.show()
+                }
+                AppLog.shared.info(String(
+                    format: "[Telemetry] recording_started session=%@ mode=%@ elapsedMs=%.0f",
+                    session.id.uuidString,
+                    session.mode.rawValue,
+                    Date().timeIntervalSince(recordingRequestedAt) * 1_000
+                ))
+                scheduleAutoStopIfNeeded()
+            } catch {
+                if didStartStreaming {
+                    let streamID = session.handsFreeSendSession?.snapshot.streamID ?? session.id
+                    _ = await transcriptionEngine.stopStreaming(streamID: streamID)
+                }
+                guard ownsStartingSession(session) else { return }
+                AppLog.shared.warn("録音開始に失敗しました")
+                finishStartingSessionWithError(
+                    session,
+                    message: uiText("録音を開始できませんでした。マイクの権限と接続を確認して、もう一度試してください。")
+                )
+            }
+        }
+    }
+
+    private func scheduleRecordingStartTimeout(for session: VoiceSession) {
+        clearRecordingStartTimeout()
+        recordingStartTimeoutSessionID = session.id
+        recordingStartTimeoutTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 12_000_000_000)
+            guard !Task.isCancelled,
+                  let self,
+                  self.recordingStartTimeoutSessionID == session.id,
+                  self.ownsStartingSession(session) else { return }
+            AppLog.shared.warn("録音開始が12秒以内に完了しなかったため中断します")
+            self.finishStartingSessionWithError(session, message: self.uiText("録音の開始がタイムアウトしました"))
+        }
+    }
+
+    private func clearRecordingStartTimeout(for session: VoiceSession? = nil) {
+        if let session, recordingStartTimeoutSessionID != session.id {
+            return
+        }
+        recordingStartTimeoutTask?.cancel()
+        recordingStartTimeoutTask = nil
+        recordingStartTimeoutSessionID = nil
+    }
+
+    private func finishStartingSessionWithError(_ session: VoiceSession, message: String) {
+        guard activeVoiceSession?.id == session.id else { return }
+        session.cancel()
+        transcriptionEngine.cancelPendingStart(streamID: session.id)
+        if recordingStartTaskSessionID == session.id {
+            recordingStartTask?.cancel()
+            recordingStartTask = nil
+            recordingStartTaskSessionID = nil
+        }
+        dictationCleanup.cancel(operation: session.id)
+        clearRecordingStartTimeout(for: session)
+        clearPendingNormalHoldState()
+        clearHandsFreeSendTriggerCandidate()
+        activeVoiceSession = nil
+        appState.setPhase(.error(message))
+        hud.clearHandsFreeSendState()
+        hud.flashError()
+        scheduleHUDHideAfterError()
+        Task {
+            await audioRecorder.stop()
+            let streamID = session.handsFreeSendSession?.snapshot.streamID ?? session.id
+            _ = await transcriptionEngine.stopStreaming(streamID: streamID)
+        }
+    }
+
+    /// Secure InputではSpaceのkeyDownだけが隠れ、modifierイベントだけが届くことがある。
+    /// 入口ごとに先に止め、selection／clipboard読取りやsession生成を始めない。
+    private func canStartRecordingOutsideSecureInput() -> Bool {
+        guard RecordingStartSafetyPolicy.decision(
+            isSecureInputEnabled: IsSecureEventInputEnabled()
+        ) == .allow else {
+            clearPendingNormalHoldState()
+            clearHandsFreeSendTriggerCandidate()
+            AppLog.shared.info("[Telemetry] recording_start_blocked reason=secure_input")
+            // Secure Input拒否はsessionを作らず、次の操作をbusy扱いにしない。HUDだけを
+            // 非活性のエラー表示にして、appのpipelineはidleのまま保つ。
+            appState.setPhase(.idle)
+            hud.clearAICommandState()
+            hud.clearHandsFreeSendState()
+            hud.flashError()
+            return false
+        }
+        return true
+    }
+
+    /// 録音開始時に取る、明示されたAI結果を外部入力先へ送るための同意snapshot。
+    /// 送出時にも同じ条件を再確認するため、処理中にONへ変えて権限を広げることはない。
+    private func aiCommandExplicitInsertionAllowedAtCurrentSettings() -> Bool {
+        let compatibility = settingsStore.settings.externalAppCompatibilitySettings
+        return compatibility.enabled && compatibility.autoReplaceAICommandSelection
+    }
+
+    private func ownsStartingSession(_ session: VoiceSession) -> Bool {
+        !Task.isCancelled
+            && !session.isCancelled
+            && activeVoiceSession?.id == session.id
+            && appState.phase == .starting
+    }
+
+    /// autoStopSeconds > 0 の場合、指定秒数後に自動停止して通常処理へ進むタイマーをセットする。
+    private func scheduleAutoStopIfNeeded() {
+        autoStopTask?.cancel()
+        let seconds = settingsStore.settings.effectiveAutoStopSeconds
+        guard seconds > 0 else { return }
+
+        autoStopTask = Task { [weak self] in
+            if seconds > 10 {
+                try? await Task.sleep(nanoseconds: UInt64(seconds - 10) * 1_000_000_000)
+                guard !Task.isCancelled, let self, self.appState.phase == .recording else { return }
+                if self.activeVoiceSession?.mode == .aiCommand {
+                    self.hud.showAICommandState(.recordingEndingSoon)
+                }
+                try? await Task.sleep(nanoseconds: 10_000_000_000)
+            } else {
+                try? await Task.sleep(nanoseconds: UInt64(seconds) * 1_000_000_000)
+            }
+            guard !Task.isCancelled, let self else { return }
+            guard self.appState.phase == .recording else { return }
+            AppLog.shared.info("自動停止タイマー超過（\(seconds)秒）。録音を停止します")
+            if let session = self.activeVoiceSession,
+               session.handsFreeSendSession != nil {
+                _ = self.requestHandsFreeSendStop(
+                    for: session,
+                    intent: .insertOnly,
+                    evidence: .autoStop
+                )
+            } else {
+                self.stopRecordingAndProcess()
+            }
+        }
+    }
+
+    private func stopRecordingAndProcess() {
+        guard appState.phase == .recording, let session = activeVoiceSession else { return }
+        // 通常モードはWeb入力欄のAX可観測性に依存させず、前面アプリだけを保存する。
+        // AIに指示の選択置換は従来どおり厳格なAX対象を要求する。
+        //
+        // ハンズフリー送信もここで取り直す。以前は録音開始時（`handleHandsFreeSendStart`）に
+        // 固定していたため、AX情報が発話全体の長さ（数秒〜数十秒）ぶん古くなり、
+        // `replaceSelection` が `.unconfirmed` を返しやすかった。そうなると再確認の
+        // 待機（80+200+400ms）や互換貼り付けの待機（150+200ms）が積み上がり、
+        // ハンズフリーだけが通常モードより目に見えて遅くなっていた（2026-07-30の実機報告）。
+        //
+        // **受け入れたトレードオフ（ユーザー承認済み・2026-07-31）**: 発話中に別の欄へ
+        // フォーカスを移すと、移した先へ入力される（従来は話し始めた欄へ戻った）。
+        // ハンズフリーは手を離して使う前提で、発話中のフォーカス変更はまれと判断した。
+        // **これは不具合ではないので、元に戻さないこと。**
+        //
+        // 出力先の権威は録音停止時。取得失敗時にも開始時のtargetを残すと、録音中に
+        // フォーカスが変わった後に古い場所へ挿入し得るため、nilで明示的に上書きする。
+        // 外部互換または結果表示へ安全に退避する。
+        if session.mode == .voiceInput {
+            let stoppedTarget = NormalPasteTarget.capture()
+            let stoppedDestination = InsertionDestination.capture()
+            session.normalPasteTarget = stoppedTarget
+            session.insertionDestination = stoppedDestination?.processIdentifier == stoppedTarget?.processIdentifier
+                ? stoppedDestination
+                : nil
+        } else {
+            // AI入力の選択本文は開始時の`selectedText`を不変のsourceとして保持する。
+            // 出力先だけを停止時に捕捉し、完了時のフォーカス移動には追従しない。
+            let stoppedTarget = NormalPasteTarget.capture()
+            let stoppedDestination = InsertionDestination.capture()
+            session.aiCommandOutputTarget = stoppedTarget
+            session.aiCommandOutputDestination = stoppedDestination?.processIdentifier == stoppedTarget?.processIdentifier
+                ? stoppedDestination
+                : nil
+            // ADD-02①: AXで読んだ選択本文を、停止時の入力先の選択に束縛する。
+            // 束縛できなければ自動置換せず結果ウィンドウへ退避する。
+            let boundDestination = session.aiCommandOutputDestination
+            session.aiCommandSelectionBoundAtRecordingStop = AICommandSelectionReplacementGuard
+                .bindingAtRecordingStop(
+                    inputSource: session.inputSource,
+                    selectedText: session.selectedText,
+                    captureMethod: session.selectionCaptureMethod,
+                    stoppedDestinationSelectedTextMatches: { boundDestination?.bindsSelectedText($0) }
+                )
+        }
+        autoStopTask?.cancel()
+        autoStopTask = nil
+        processingTask?.cancel()
+        menuBarIconName = "mic"
+        appState.recordingStartedAt = nil
+        appState.setPhase(.transcribing)
+        AppLog.shared.info("[Telemetry] recording_stopped session=\(session.id.uuidString) mode=\(session.mode.rawValue)")
+
+        processingTaskSessionID = session.id
+        processingTask = Task {
+            defer {
+                if self.processingTaskSessionID == session.id {
+                    self.processingTask = nil
+                    self.processingTaskSessionID = nil
+                }
+                if self.activeVoiceSession?.id == session.id {
+                    self.activeVoiceSession = nil
+                }
+                if session.handsFreeSendSession != nil {
+                    self.clearHandsFreeSendTriggerCandidate()
+                    self.hud.clearHandsFreeSendState()
+                }
+                if session.mode == .voiceInput {
+                    // 整形しなかった経路（不完全な文字起こし・空・送信キーのみ・整形OFF）でも、
+                    // 録音開始時に準備したセッションを残さない。整形後に呼んでも害はない。
+                    self.dictationCleanup.cancel(operation: session.id)
+                }
+            }
+
+            let transcriptionStartedAt = Date()
+            let recordingFailure = audioRecorder.recordingFailure
+            await audioRecorder.stop()
+            let streamID = session.handsFreeSendSession?.snapshot.streamID ?? session.id
+            var stopResult = await transcriptionEngine.stopStreamingResult(streamID: streamID)
+            stopResult.audioLost = recordingFailure.hasFailed
+            let stopFlags = (timedOut: stopResult.timedOut, recognitionFailed: stopResult.recognitionFailed,
+                             unfinalizedTail: stopResult.hasUnfinalizedTail, audioLost: stopResult.audioLost)
+            AppLog.shared.info("[Telemetry] transcription_stop timedOut=\(stopFlags.timedOut) recognitionFailed=\(stopFlags.recognitionFailed) unfinalizedTail=\(stopFlags.unfinalizedTail) audioLost=\(stopFlags.audioLost)")
+            let transcript = stopResult.finalText
+            AppLog.shared.info(String(
+                format: "[Telemetry] transcription_final session=%@ elapsedMs=%.0f inputChars=%d",
+                session.id.uuidString,
+                Date().timeIntervalSince(transcriptionStartedAt) * 1_000,
+                transcript.count
+            ))
+            if stopResult.timedOut || stopResult.recognitionFailed || stopResult.hasUnfinalizedTail || stopResult.audioLost {
+                // 打ち切った本文は不完全な可能性があるため、不可逆な擬似送信はしない。
+                session.handsFreeSendSession?.revokeSendAuthorization()
+            }
+            appState.lastTranscript = transcript
+
+            if session.mode == .voiceInput {
+                // 取消された時に「直前の原文をコピー」へ渡せるよう、未確定末尾を含む全文を持っておく。
+                session.recoverableOriginalTranscript = stopResult.fullText
+                // 確定のタイムアウト、または確定結果が空で途中結果だけがある場合は、文字起こしが
+                // 不完全。自動挿入も送信もせず、全文を結果ウィンドウに出す（RV-02、通常・ハンズフリー共通）。
+                // 音声トリガー停止で確定結果が空の場合は、既存の専用経路（下）が同じく結果ウィンドウへ退避する。
+                if case .review(let fullText, let notice) = DictationTranscriptCompletenessPolicy.decision(for: stopResult),
+                   !DictationTranscriptCompletenessPolicy.usesVoiceTriggerFallback(
+                       for: stopResult, isVoiceTriggerSend: session.handsFreeSendSession?.isVoiceTriggerSend == true) {
+                    guard ownsCurrentNormalProcessing(session) else { return }
+                    AppLog.shared.warn("文字起こしが不完全なため、自動挿入・送信を行わず結果ウィンドウに表示します")
+                    let reviewText = DictationTranscriptCompletenessPolicy.reviewText(
+                        fullText,
+                        handsFreeTriggers: session.handsFreeSendSession?.compiledTriggers
+                    )
+                    appState.setPhase(.idle)
+                    hud.clearHandsFreeSendState()
+                    hud.hide()
+                    if notice == .transcriptionIncomplete || !reviewText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        lastOriginalTranscript.remember(reviewText, sessionID: session.id)
+                        presentDictationResult(reviewText, notice: notice)
+                    }
+                    return
+                }
+            }
+
+            if session.mode == .aiCommand,
+               case .showTranscript(let fullText, let noticeKey) = AICommandTranscriptCompletenessPolicy
+                .decision(for: stopResult) {
+                // 確定が不完全な指示では生成せず、選択文章にも触れない（RV-02）。
+                guard ownsAICommandSession(session) else { return }
+                AppLog.shared.warn("文字起こしが不完全なため、AIに指示を実行せず結果ウィンドウに表示します")
+                appState.setPhase(.idle)
+                hud.clearAICommandState()
+                hud.hide()
+                aiCommandResultWindows.show(AICommandResultPayload(
+                    spokenInstruction: "",
+                    selectedText: nil,
+                    answer: fullText,
+                    title: "AIに指示モード",
+                    notice: uiText(noticeKey),
+                    answerSectionTitle: "出力",
+                    copyButtonTitle: "出力をコピー"
+                ))
+                return
+            }
+
+            guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                if let handsFreeSession = session.handsFreeSendSession,
+                   handsFreeSession.isVoiceTriggerSend {
+                    appState.setPhase(.idle)
+                    hud.clearHandsFreeSendState()
+                    hud.hide()
+                    presentNormalInputFallback(
+                        handsFreeSession.voiceTriggerFallbackTranscript ?? transcriptionEngine.partialText,
+                        notice: uiText("音声トリガー後の認識結果を安全に確定できなかったため、自動挿入・送信を中止しました。内容を確認してコピーしてください。")
+                    )
+                    return
+                }
+                appState.setPhase(.idle)
+                hud.hide()
+                return
+            }
+
+            let handsFreeResolution = resolveHandsFreeSendTranscript(
+                transcript,
+                for: session
+            )
+            switch handsFreeResolution {
+            case .mismatch:
+                appState.setPhase(.idle)
+                hud.clearHandsFreeSendState()
+                hud.hide()
+                presentNormalInputFallback(
+                    transcript,
+                    notice: uiText("音声トリガーを安全に除去できなかったため、自動挿入・送信を中止しました。内容を確認してコピーしてください。")
+                )
+                return
+            case .sendKeyOnly(let sendRequest):
+                await dispatchHandsFreeSendKeyWithoutText(
+                    request: sendRequest,
+                    session: session
+                )
+                return
+            case .pipeline(let transcriptForPipeline, let sendAfterInsert):
+                await continueNormalPipeline(
+                    transcript: transcript,
+                    transcriptForPipeline: transcriptForPipeline,
+                    session: session,
+                    sendAfterInsert: sendAfterInsert
+                )
+            }
+        }
+    }
+
+    private enum HandsFreeTranscriptResolution {
+        case pipeline(transcript: String, sendAfterInsert: SendAfterInsertRequest?)
+        /// トリガー句だけの発話。本文を挿入せず送信キーだけを送る。
+        /// 入力なしで改行・送信したい場面のための経路。
+        case sendKeyOnly(SendAfterInsertRequest)
+        case mismatch
+    }
+
+    private func resolveHandsFreeSendTranscript(
+        _ transcript: String,
+        for session: VoiceSession
+    ) -> HandsFreeTranscriptResolution {
+        guard let handsFreeSession = session.handsFreeSendSession else {
+            return .pipeline(transcript: transcript, sendAfterInsert: nil)
+        }
+
+        // 音声トリガー以外の停止でも、ユーザーはすでにトリガー句を言い終えている
+        // ことがある。実機では「…、ストップ送信。」が本文に残ったまま送信された。
+        // どの停止経路でも同じように除去する。
+        let sanitizedTranscript = HandsFreeSendTriggerPolicy.sanitizeFinalTranscript(
+            transcript,
+            triggers: handsFreeSession.compiledTriggers
+        )?.transcriptWithoutTrigger
+
+        if handsFreeSession.sendAuthorizationRevoked {
+            AppLog.shared.warn("event tapが無効化されたため、擬似送信は行わず挿入のみ実行します")
+            return .pipeline(transcript: sanitizedTranscript ?? transcript, sendAfterInsert: nil)
+        }
+
+        // トリガー句だけの発話は、末尾のトリガー句を繰り返し剥がすと本文が空になる。
+        // 挿入するものが無いので、送信キーだけを送る。
+        let isTriggerOnly = HandsFreeSendTriggerPolicy.isTriggerOnlyUtterance(
+            transcript,
+            triggers: handsFreeSession.compiledTriggers
+        )
+
+        switch (handsFreeSession.claimedIntent, handsFreeSession.claimedEvidence) {
+        case (.send, .voiceTrigger):
+            if isTriggerOnly {
+                AppLog.shared.info("トリガー句だけの発話のため、本文を挿入せず送信キーだけを送ります")
+                return .sendKeyOnly(
+                    makeHandsFreeSendRequest(for: session, handsFreeSession: handsFreeSession)
+                )
+            }
+            // 暫定結果で検出したトリガー句が確定時に別語へ修正された場合は、
+            // 本文の切り出しに責任を持てないため自動挿入・送信を中止する。
+            guard let sanitizedTranscript else { return .mismatch }
+            return .pipeline(
+                transcript: sanitizedTranscript,
+                sendAfterInsert: makeHandsFreeSendRequest(for: session, handsFreeSession: handsFreeSession)
+            )
+        case (.send, .stopHotkey):
+            if isTriggerOnly {
+                AppLog.shared.info("トリガー句だけの発話のため、本文を挿入せず送信キーだけを送ります")
+                return .sendKeyOnly(
+                    makeHandsFreeSendRequest(for: session, handsFreeSession: handsFreeSession)
+                )
+            }
+            return .pipeline(
+                transcript: sanitizedTranscript ?? transcript,
+                sendAfterInsert: makeHandsFreeSendRequest(for: session, handsFreeSession: handsFreeSession)
+            )
+        case (.send, _):
+            // send意図と対応しない証跡は内部不整合として扱い、本文だけを安全に挿入する。
+            return .pipeline(transcript: sanitizedTranscript ?? transcript, sendAfterInsert: nil)
+        case (.insertOnly, _), (nil, _):
+            // 自動停止・HUD完了、または想定外の停止経路では本文だけを安全に挿入する。
+            return .pipeline(transcript: sanitizedTranscript ?? transcript, sendAfterInsert: nil)
+        }
+    }
+
+    private func makeHandsFreeSendRequest(
+        for session: VoiceSession,
+        handsFreeSession: HandsFreeSendSession
+    ) -> SendAfterInsertRequest {
+        SendAfterInsertRequest(
+            sessionID: session.id,
+            mode: session.mode,
+            keyStroke: handsFreeSession.snapshot.settings.sendKey,
+            externalCompatibilityEnabledAtRecordingStart: handsFreeSession.snapshot.externalCompatibilityEnabledAtRecordingStart,
+            externalCompatibilityAutoSendEnabledAtRecordingStart: handsFreeSession.snapshot.settings.allowExternalAutoSend
+        )
+    }
+
+    private func continueNormalPipeline(
+        transcript: String,
+        transcriptForPipeline: String,
+        session: VoiceSession,
+        sendAfterInsert: SendAfterInsertRequest?
+    ) async {
+
+        if session.mode == .aiCommand {
+            saveAICommandTranscriptIfNeeded(
+                transcript,
+                settings: session.aiCommandSettings,
+                inputSource: session.inputSource
+            )
+        }
+
+        guard !Task.isCancelled, !session.isCancelled else {
+            appState.setPhase(.idle)
+            hud.clearHandsFreeSendState()
+            hud.hide()
+            AppLog.shared.info("処理キャンセル: 文字起こし後に停止")
+            return
+        }
+
+        if session.mode == .aiCommand {
+            await processAICommand(transcript: transcript, session: session)
+            return
+        }
+
+        var cleanupDidFail = false
+        var unformattedReason: DictationFailureReason?
+        var unformattedNoticeKey = DictationCleanupMessages.unformattedInsertedKey
+        var cleanupLatencyMs: Int?
+        let textToInsert: String
+        let handsFree = session.handsFreeSendSession != nil
+        // 録音開始時のON/OFFで経路を固定する（処理中に設定を切り替えても変えない）。
+        if DictationProcessingPathPolicy.path(for: session) == .cleanup {
+            appState.setPhase(.cleaning)
+            let cleanupStartedAt = Date()
+            AppLog.shared.info("整形開始: 入力\(transcript.count)字")
+            let languagePreferences = settingsStore.settings.languagePreferences
+            let directive = SpokenOutputLanguageDirective.parse(transcriptForPipeline)
+            let transcriptForCleanup = directive?.transcriptWithoutDirective ?? transcriptForPipeline
+            let outputLanguage = OutputLanguageResolution.resolve(
+                transcript: transcriptForPipeline,
+                savedPreference: languagePreferences.aiOutputLanguage,
+                sttLanguage: languagePreferences.sttLanguage
+            )
+            let customInstruction = NormalInputCustomInstructionPolicy.resolve(
+                handsFreeSendSnapshot: session.handsFreeSendSession?.snapshot,
+                liveCustomInstruction: settingsStore.settings.customInstruction
+            )
+            let cleanupRequest = DictationCleanupRequest(
+                transcript: transcriptForCleanup,
+                customInstruction: customInstruction,
+                dictionaryEntries: personalDictionaryStore.enabledEntries,
+                sttLanguage: languagePreferences.sttLanguage,
+                outputLanguage: outputLanguage,
+                handsFree: handsFree
+            )
+            let outcome = await dictationCleanup.cleanup(
+                cleanupRequest,
+                operation: session.id,
+                progress: { [weak self] progress in
+                    guard let self, self.ownsCurrentNormalProcessing(session) else { return }
+                    self.hud.showChunkProgress(completed: progress.completed, total: progress.total)
+                }
+            )
+            if processingTaskSessionID == session.id, activeVoiceSession?.id == session.id {
+                hud.clearChunkProgress()
+            }
+            let elapsed = Date().timeIntervalSince(cleanupStartedAt)
+            cleanupLatencyMs = Int((elapsed * 1000).rounded())
+            // 取消後に届いた結果は、内容にかかわらず挿入・送信しない（STATE-08、V-04）。
+            guard !Task.isCancelled, !session.isCancelled else {
+                appState.setPhase(.idle)
+                hud.clearHandsFreeSendState()
+                hud.hide()
+                AppLog.shared.info("処理キャンセル: AI整形後に停止")
+                return
+            }
+            var fallbackText = transcriptForPipeline
+            if case .failed = outcome, !handsFree {
+                guard let text = await dictationCleanup.fallbackText(
+                    for: transcriptForPipeline, request: cleanupRequest, operation: session.id
+                ) else {
+                    guard ownsCurrentNormalProcessing(session) else { return }
+                    appState.setPhase(.idle)
+                    hud.clearHandsFreeSendState()
+                    hud.hide()
+                    AppLog.shared.info("処理キャンセル: 原文フォールバック中に停止")
+                    return
+                }
+                fallbackText = text
+            }
+            guard ownsCurrentNormalProcessing(session) else { return }
+            switch DictationCleanupDispositionPolicy.disposition(
+                for: outcome,
+                original: transcriptForPipeline,
+                handsFree: handsFree,
+                fallback: { _ in fallbackText }
+            ) {
+            case .discard:
+                appState.setPhase(.idle)
+                hud.clearHandsFreeSendState()
+                hud.hide()
+                AppLog.shared.info("処理キャンセル: AI整形中に停止")
+                return
+            case .insert(let cleanedText):
+                AppLog.shared.info(String(format: "整形成功: %.2f秒, 出力%d字", elapsed, cleanedText.count))
+                textToInsert = cleanedText
+            case .insertUnformatted(let original, let reason):
+                // AIを使えなかった非整形は、利用者の整形OFFと区別して通知する（VOICE-11）。
+                let dictionaryApplied = original != transcriptForPipeline
+                AppLog.shared.warn(String(
+                    format: "整形失敗(%.2f秒): reason=%@ — %@へフォールバック",
+                    elapsed, reason.rawValue, dictionaryApplied ? "辞書の表記だけを反映した文" : "未整形の原文"
+                ))
+                cleanupDidFail = true
+                unformattedReason = reason
+                unformattedNoticeKey = DictationCleanupMessages.unformattedNoticeKey(
+                    inserted: original, original: transcriptForPipeline
+                )
+                lastOriginalTranscript.remember(transcriptForPipeline, sessionID: session.id)
+                textToInsert = original
+            case .showResult(let reviewText, let notice):
+                // ハンズフリーのAI失敗と確認が必要な結果は、挿入も送信もせず結果ウィンドウへ退避する。
+                if case .aiFailed(let reason) = notice {
+                    AppLog.shared.warn(String(
+                        format: "整形失敗(%.2f秒): reason=%@ — 自動挿入・送信を中止し結果ウィンドウへ",
+                        elapsed, reason.rawValue
+                    ))
+                } else {
+                    AppLog.shared.warn(String(
+                        format: "整形結果の確認が必要(%.2f秒) — 自動挿入・送信を中止し結果ウィンドウへ", elapsed
+                    ))
+                }
+                lastOriginalTranscript.remember(transcriptForPipeline, sessionID: session.id)
+                appState.setPhase(.idle)
+                hud.clearHandsFreeSendState()
+                hud.hide()
+                presentDictationResult(reviewText, notice: notice)
+                return
+            }
+        } else {
+            // 利用者が整形をOFFにしている：原文を挿入し、既存の条件で送信する（既存）。
+            textToInsert = transcriptForPipeline
+        }
+        guard !Task.isCancelled else {
+            appState.setPhase(.idle)
+            hud.hide()
+            AppLog.shared.info("処理キャンセル: 挿入前に停止")
+            return
+        }
+        appState.lastCleanedText = textToInsert
+        await performNormalTextInsertion(
+            textToInsert,
+            cleanupDidFail: cleanupDidFail,
+            unformattedReason: unformattedReason,
+            unformattedNoticeKey: unformattedNoticeKey,
+            cleanupLatencyMs: cleanupLatencyMs,
+            normalTarget: session.normalPasteTarget,
+            verificationDestination: session.insertionDestination,
+            session: session,
+            // 未整形の原文は送信しない（HF-06）。
+            sendAfterInsert: cleanupDidFail ? nil : sendAfterInsert
+        )
+    }
+
+    private func performNormalTextInsertion(
+        _ textToInsert: String,
+        cleanupDidFail: Bool,
+        unformattedReason: DictationFailureReason? = nil,
+        unformattedNoticeKey: String = DictationCleanupMessages.unformattedInsertedKey,
+        cleanupLatencyMs: Int?,
+        normalTarget: NormalPasteTarget?,
+        verificationDestination: InsertionDestination?,
+        session: VoiceSession,
+        sendAfterInsert: SendAfterInsertRequest?
+    ) async {
+        guard ownsCurrentNormalProcessing(session) else { return }
+        // 挿入・送信キーの本文照合・履歴・手動フォールバックが同じ文字列を見るよう、
+        // ここで一度だけ不可視文字を除去する。TextInjector側の除去はこの後は冪等に働く。
+        // 除去して空になった場合は元の文字列を渡し、拒否の判断はTextInjectorへ委ねる。
+        let originalContainsNewline = UnverifiedInsertionPolicy.containsNewline(textToInsert)
+        let sanitizedTextToInsert = InvisibleCharacterSanitizer.sanitize(textToInsert)
+        let textToInsert = sanitizedTextToInsert.isEmpty ? textToInsert : sanitizedTextToInsert
+        appState.setPhase(.inserting)
+        let insertStartedAt = Date()
+        let insertionOutcome = await textInjector.insert(
+            textToInsert,
+            forNormalTarget: normalTarget,
+            verificationDestination: verificationDestination,
+            allowExternalCompatibility: session.allowsCompatibility(
+                currentEnabled: settingsStore.settings.externalAppCompatibilitySettings.enabled
+            ),
+            allowScopedClipboardFallback: session.allowsScopedClipboardFallback(
+                currentEnabled: settingsStore.settings.externalAppCompatibilitySettings.enabled,
+                currentAllowed: settingsStore.settings.externalAppCompatibilitySettings.allowScopedClipboardFallback
+            ),
+            // 未確認Unicode本文中の改行が外部チャットで送信扱いになる余地を避ける。
+            // 通常モードは許可し、HFS本文だけ結果表示へ戻す。
+            allowUnverifiedMultilineText: session.allowsUnverifiedMultilineText,
+            originalContainsNewline: originalContainsNewline,
+            liveCompatibilityConsent: { [self] in
+                session.allowsCompatibility(currentEnabled: settingsStore.settings.externalAppCompatibilitySettings.enabled)
+            },
+            liveScopedClipboardConsent: { [self] in
+                session.allowsScopedClipboardFallback(
+                    currentEnabled: settingsStore.settings.externalAppCompatibilitySettings.enabled,
+                    currentAllowed: settingsStore.settings.externalAppCompatibilitySettings.allowScopedClipboardFallback
+                )
+            }
+        )
+        let result = insertionOutcome.result
+        guard ownsCurrentNormalProcessing(session) else {
+            appState.setPhase(.idle)
+            hud.hide()
+            AppLog.shared.info("処理キャンセル: 挿入後・履歴保存前に停止")
+            return
+        }
+        if NormalInputHistoryPolicy.shouldRecord(result) {
+            let usesHandsFreeSendHistory = session.handsFreeSendSession != nil
+            let currentSettings = settingsStore.settings
+            recordInputHistoryIfNeeded(
+                mode: usesHandsFreeSendHistory ? InputHistoryMode.handsFreeSend : InputHistoryMode.voiceInput,
+                historyEnabled: usesHandsFreeSendHistory
+                    ? currentSettings.handsFreeSendSettings.historyEnabled
+                    : currentSettings.historyEnabled,
+                historyRetentionDays: usesHandsFreeSendHistory
+                    ? currentSettings.handsFreeSendSettings.historyRetentionDays
+                    : currentSettings.historyRetentionDays,
+                textToInsert: textToInsert,
+                cleanupEnabled: session.cleanupEnabledAtRecordingStart,
+                cleanupDidFail: cleanupDidFail,
+                insertResult: result,
+                cleanupLatencyMs: cleanupLatencyMs
+            )
+        } else {
+            // 種別を出さないと切り分けができない。Safariの不具合調査では、失敗した
+            // resultがログに残らないことが原因特定を長引かせた（2026-07-30）。
+            AppLog.shared.warn(
+                "挿入準備を確認できなかったため出力履歴は保存しません（result=\(Self.describeInsertionResult(result))）"
+            )
+        }
+        logNormalInputCompletion(
+            result: result,
+            cleanupLatencyMs: cleanupLatencyMs,
+            insertionStartedAt: insertStartedAt
+        )
+        AppLog.shared.info(String(
+            format: "挿入処理応答: %.2f秒, 出力%d字",
+            Date().timeIntervalSince(insertStartedAt),
+            textToInsert.count
+        ))
+
+        let sendDispatchResult = await dispatchSendKeyIfRequested(
+            request: sendAfterInsert,
+            eligibility: insertionOutcome.sendEligibility,
+            textToInsert: textToInsert,
+            normalTarget: normalTarget,
+            verificationDestination: verificationDestination,
+            session: session
+        )
+        guard ownsCurrentNormalProcessing(session) else {
+            appState.setPhase(.idle)
+            hud.hide()
+            AppLog.shared.info("処理キャンセル: 擬似送信待機中に停止")
+            return
+        }
+        let sendWasBlocked = sendDispatchResult.map { $0 != .sent } ?? false
+
+        switch result {
+        case .inserted, .unicodeSubmitted, .scopedClipboardFallbackSubmitted:
+            // 挿入バー1ショット(spring 0.35s)の視認保証: 最低500ms表示してから閉じる（§1.4）
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard ownsCurrentNormalProcessing(session) else { return }
+            appState.setPhase(.idle)
+            AppLog.shared.info(cleanupDidFail ? "挿入完了（整形は失敗し未整形の文を挿入）" : "整形完了・挿入完了")
+            if let unformattedReason {
+                // 挿入が実際に成功した時だけ、挿入した文の種類（原文／辞書反映）に応じて通知する。
+                dictationNotice = uiText(unformattedNoticeKey)
+                    + " " + DictationCleanupMessages.reasonKeys(unformattedReason).map(uiText).joined(separator: " ")
+            }
+            if cleanupDidFail {
+                flashMenuBarWarning()
+                hud.flashWarning(durationSeconds: 1.5)
+                return
+            }
+            finishSuccessfulNormalInsertion(sendWasBlocked: sendWasBlocked)
+        case .externalCompatibilityDisabled:
+            appState.setPhase(.idle)
+            hud.hide()
+            presentExternalCompatibilityGuide(
+                returnToProcessIdentifier: normalTarget?.processIdentifier,
+                deferredNormalOutput: textToInsert
+            )
+        case .clipboardMayHaveBeenLost:
+            appState.setPhase(.idle)
+            hud.hide()
+            presentNormalInputFallback(
+                textToInsert,
+                notice: uiText("以前のクリップボード内容が失われた可能性があります。必要な内容を確認してください。")
+            )
+        case .manualFallbackRequired where insertionOutcome.fallbackReason == .payloadTooLong:
+            // 通常モードにも同じ上限がある。理由を伏せると「短い文は入るのに長い文は
+            // 入らない」が不具合に見えるため、「AIに指示」と同じ説明を出す。
+            appState.setPhase(.idle)
+            hud.hide()
+            presentNormalInputFallback(
+                textToInsert,
+                notice: payloadTooLongInsertionFallbackNotice()
+            )
+        case .secureInputBlocked, .manualFallbackRequired, .insertionUnconfirmed, .failed,
+             // クリップボードバリアントの3ケースは「AIに指示」専用経路（`insertAICommandOutput`）
+             // だけが返す。通常モードの`insert(...)`からは構築されないため、ここには到達しない。
+             .clipboardVariantPasteConfirmed, .clipboardVariantPasteSubmittedUnverified,
+             .clipboardVariantPasteMayHaveLostClipboard:
+            appState.setPhase(.idle)
+            hud.hide()
+            presentNormalInputFallback(textToInsert)
+        }
+    }
+
+    /// 現在の処理タスクだけが擬似送信とHUD更新を所有できる。
+    private func ownsCurrentNormalProcessing(_ session: VoiceSession) -> Bool {
+        !Task.isCancelled
+            && !session.isCancelled
+            && processingTaskSessionID == session.id
+            && activeVoiceSession?.id == session.id
+    }
+
+    /// トリガー句だけの発話に対して、本文を挿入せず送信キーだけを送る。
+    /// AI整形も履歴保存も行わない。入力なしで改行・送信したい場面のための経路。
+    private func dispatchHandsFreeSendKeyWithoutText(
+        request: SendAfterInsertRequest,
+        session: VoiceSession
+    ) async {
+        // 所有権の確認より先にphaseを触ると、別sessionが処理中の場合にその状態を
+        // 踏み潰す。所有していることを確かめてから遷移させる。
+        guard ownsCurrentNormalProcessing(session),
+              let handsFreeSession = session.handsFreeSendSession else {
+            return
+        }
+        defer {
+            // 待機中に所有権を失っていたら、後続sessionのphaseを壊さない。
+            if ownsCurrentNormalProcessing(session) {
+                appState.setPhase(.idle)
+                hud.clearHandsFreeSendState()
+                hud.hide()
+            }
+        }
+        appState.setPhase(.inserting)
+        guard let normalTarget = session.normalPasteTarget,
+              let destination = session.insertionDestination else {
+            AppLog.shared.warn("送信キーのみの送出を中止: 挿入先アプリを特定できません")
+            showHandsFreeSendDispatchFeedback(.skipped, for: session)
+            return
+        }
+        guard !handsFreeSession.sendAuthorizationRevoked else {
+            AppLog.shared.warn("送信キーのみの送出を中止: 送信権限が取り消されています")
+            showHandsFreeSendDispatchFeedback(.skipped, for: session)
+            return
+        }
+        let currentSettings = settingsStore.settings.handsFreeSendSettings
+        guard SendKeyDispatchPolicy.shouldDispatch(
+            request: request,
+            eligibility: .triggerOnlyValidated,
+            currentSettings: currentSettings,
+            externalCompatibilityEnabled: settingsStore.settings.externalAppCompatibilitySettings.enabled
+        ) else {
+            AppLog.shared.warn("送信キーのみの送出を安全条件で中止")
+            showHandsFreeSendDispatchFeedback(.skipped, for: session)
+            return
+        }
+        guard destination.initialState != .nonEditable,
+              destination.currentFocusMatchesCapturedEditableElement() else {
+            AppLog.shared.warn("送信キーのみの送出を中止: 停止時と同じ編集可能targetを確認できません")
+            showHandsFreeSendDispatchFeedback(.skipped, for: session)
+            return
+        }
+        guard ownsCurrentNormalProcessing(session),
+              !handsFreeSession.sendAuthorizationRevoked,
+              SendKeyDispatchPolicy.shouldDispatch(
+                  request: request,
+                  eligibility: .triggerOnlyValidated,
+                  currentSettings: settingsStore.settings.handsFreeSendSettings,
+                  externalCompatibilityEnabled: settingsStore.settings.externalAppCompatibilitySettings.enabled
+              ) else {
+            AppLog.shared.warn("送信キーのみの送出を送出直前の安全条件で中止")
+            showHandsFreeSendDispatchFeedback(.skipped, for: session)
+            return
+        }
+        showHandsFreeSendDispatchFeedback(.armed, for: session)
+        let result = textInjector.postSendKey(
+            request.keyStroke,
+            forNormalTarget: normalTarget,
+            verificationDestination: destination,
+            verification: .exactCapturedEditableField
+        )
+        switch result {
+        case .sent:
+            AppLog.shared.info("本文なしで送信キーを送出")
+            showHandsFreeSendDispatchFeedback(.posted, for: session)
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        case .notAuthorized, .cancelledOrStale, .missingTarget,
+             .secureInputBlocked, .targetChanged, .focusedElementOrTextChanged, .eventCreationFailed:
+            AppLog.shared.warn("本文なしの送信キーを送出できなかった")
+            showHandsFreeSendDispatchFeedback(.skipped, for: session)
+        }
+    }
+
+    private func dispatchSendKeyIfRequested(
+        request: SendAfterInsertRequest?,
+        eligibility: SendAfterInsertEligibility,
+        textToInsert: String,
+        normalTarget: NormalPasteTarget?,
+        verificationDestination: InsertionDestination?,
+        session: VoiceSession
+    ) async -> SendKeyDispatchResult? {
+        guard let request else { return nil }
+        guard request.sessionID == session.id else { return .cancelledOrStale }
+        guard ownsCurrentNormalProcessing(session) else { return .cancelledOrStale }
+        guard let handsFreeSession = session.handsFreeSendSession,
+              !handsFreeSession.sendAuthorizationRevoked else {
+            AppLog.shared.warn("擬似送信を中止: 送信権限が取り消されています")
+            showHandsFreeSendDispatchFeedback(.skipped, for: session)
+            return .notAuthorized
+        }
+        let currentSettings = settingsStore.settings.handsFreeSendSettings
+        let externalCompatibilityEnabled = settingsStore.settings.externalAppCompatibilitySettings.enabled
+        guard SendKeyDispatchPolicy.shouldDispatch(
+            request: request,
+            eligibility: eligibility,
+            currentSettings: currentSettings,
+            externalCompatibilityEnabled: externalCompatibilityEnabled
+        ) else {
+            AppLog.shared.warn("擬似送信を安全条件で中止")
+            showHandsFreeSendDispatchFeedback(.skipped, for: session)
+            return .notAuthorized
+        }
+        // 限定Cmd-V経路は本文を入れてもReturnを送らない。Unicodeは本文反映をAXで
+        // 証明できないため、停止時と同一の編集可能AX要素をもう一度確認できる場合だけ。
+        guard let verificationDestination else {
+            AppLog.shared.warn("擬似送信を中止: 本文反映を確認できない外部入力経路です")
+            showHandsFreeSendDispatchFeedback(.skipped, for: session)
+            return .notAuthorized
+        }
+        let verification: SendKeyVerificationMode
+        switch eligibility {
+        case .directAXVerified:
+            verification = .confirmedInsertedText(textToInsert)
+        case .unicodeSubmitted:
+            verification = .exactCapturedEditableField
+        case .triggerOnlyValidated, .notEligible:
+            AppLog.shared.warn("擬似送信を中止: この本文入力経路ではReturnを送出しません")
+            showHandsFreeSendDispatchFeedback(.skipped, for: session)
+            return .notAuthorized
+        }
+
+        showHandsFreeSendDispatchFeedback(.armed, for: session)
+
+        // 送出直前にセッション・設定・前面アプリを再評価する。
+        guard ownsCurrentNormalProcessing(session) else { return .cancelledOrStale }
+        guard !handsFreeSession.sendAuthorizationRevoked else {
+            AppLog.shared.warn("擬似送信を送出直前の安全条件で中止: 送信権限が取り消されています")
+            showHandsFreeSendDispatchFeedback(.skipped, for: session)
+            return .notAuthorized
+        }
+        let liveSettings = settingsStore.settings.handsFreeSendSettings
+        guard SendKeyDispatchPolicy.shouldDispatch(
+            request: request,
+            eligibility: eligibility,
+            currentSettings: liveSettings,
+            externalCompatibilityEnabled: settingsStore.settings.externalAppCompatibilitySettings.enabled
+        ) else {
+            AppLog.shared.warn("擬似送信を送出直前の安全条件で中止")
+            showHandsFreeSendDispatchFeedback(.skipped, for: session)
+            return .notAuthorized
+        }
+        guard let normalTarget else {
+            showHandsFreeSendDispatchFeedback(.skipped, for: session)
+            return .missingTarget
+        }
+
+        // 同じMainActor turn内でも、送出条件はReturnの直前まで明示しておく。本文だけ
+        // を挿入する経路と異なり、擬似Returnは別の場所へ届くと不可逆だからである。
+        guard !handsFreeSession.sendAuthorizationRevoked else {
+            AppLog.shared.warn("擬似送信をReturn直前の安全条件で中止: 送信権限が取り消されています")
+            showHandsFreeSendDispatchFeedback(.skipped, for: session)
+            return .notAuthorized
+        }
+
+        let result = textInjector.postSendKey(
+            request.keyStroke,
+            forNormalTarget: normalTarget,
+            verificationDestination: verificationDestination,
+            verification: verification
+        )
+        switch result {
+        case .sent:
+            AppLog.shared.info("擬似送信を送出")
+            showHandsFreeSendDispatchFeedback(.posted, for: session)
+        case .notAuthorized, .cancelledOrStale, .missingTarget,
+             .secureInputBlocked, .targetChanged, .focusedElementOrTextChanged, .eventCreationFailed:
+            AppLog.shared.warn("擬似送信を送出できなかった")
+            showHandsFreeSendDispatchFeedback(.skipped, for: session)
+        }
+        return result
+    }
+
+    private func showHandsFreeSendDispatchFeedback(
+        _ feedback: SendDispatchFeedback,
+        for session: VoiceSession
+    ) {
+        guard session.handsFreeSendSession != nil else { return }
+        hud.showHandsFreeSendState(HandsFreeSendHUDFeedbackPolicy.state(for: feedback))
+        if feedback == .skipped {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                guard !Task.isCancelled,
+                      let self,
+                      self.activeVoiceSession?.id == session.id else { return }
+                self.hud.clearHandsFreeSendState()
+            }
+        }
+    }
+
+    /// 「AIに指示」の挿入結果をログ用の短い識別子にする。本文は含めない。
+    /// `describeInsertionResult`は`TextInjectorResult`用で、`insertAICommandOutput`が返す
+    /// `SafeTextInjectionResult`からは呼べないため、対応する写像をここに持つ。
+    /// **Confirmed と Unverified を必ず別の識別子にする。** 同じにすると、
+    /// 貼り付けが反映されなかった事実が事後に判別できなくなる。
+    static func describeSafeInsertionResult(_ result: SafeTextInjectionResult) -> String {
+        switch result {
+        case .inserted: return "inserted"
+        case .unicodeSubmitted: return "unicode_submitted"
+        case .scopedClipboardFallbackSubmitted: return "scoped_clipboard_submitted"
+        case .clipboardVariantPasteConfirmed: return "clipboard_variant_confirmed"
+        case .clipboardVariantPasteSubmittedUnverified: return "clipboard_variant_unverified"
+        case .clipboardVariantPasteMayHaveLostClipboard: return "clipboard_variant_clipboard_lost"
+        case .externalCompatibilityDisabled: return "external_compatibility_disabled"
+        case .manualFallbackRequired: return "manual_fallback_required"
+        case .payloadTooLongForDirectInsertion: return "payload_too_long"
+        case .insertionUnconfirmed: return "insertion_unconfirmed"
+        case .nonEditable: return "non_editable"
+        case .selectionNotCollapsed: return "selection_not_collapsed"
+        case .targetChanged: return "target_changed"
+        case .secureInputBlocked: return "secure_input_blocked"
+        case .failed(let error): return "failed(\(type(of: error)))"
+        }
+    }
+
+    /// 失敗した挿入結果をログ用の短い識別子にする。本文は含めない。
+    static func describeInsertionResult(_ result: TextInjectorResult) -> String {
+        switch result {
+        case .inserted: return "inserted"
+        case .unicodeSubmitted: return "unicode_submitted"
+        case .scopedClipboardFallbackSubmitted: return "scoped_clipboard_submitted"
+        case .clipboardVariantPasteConfirmed: return "clipboard_variant_confirmed"
+        case .clipboardVariantPasteSubmittedUnverified: return "clipboard_variant_unverified"
+        case .clipboardVariantPasteMayHaveLostClipboard: return "clipboard_variant_clipboard_lost"
+        case .externalCompatibilityDisabled: return "external_compatibility_disabled"
+        case .manualFallbackRequired: return "manual_fallback_required"
+        case .clipboardMayHaveBeenLost: return "clipboard_may_have_been_lost"
+        case .insertionUnconfirmed: return "insertion_unconfirmed"
+        case .secureInputBlocked: return "secure_input_blocked"
+        case .failed(let error): return "failed(\(type(of: error)))"
+        }
+    }
+
+    private func finishSuccessfulNormalInsertion(sendWasBlocked _: Bool) {
+        // Unicode後にReturnを省略するのは通常仕様であり、本文入力を失敗扱いにしない。
+        // HFSの短い非テキスト表示はdispatch側で完結させる。
+        hud.hide()
+    }
+
+    private func saveAICommandTranscriptIfNeeded(
+        _ transcript: String,
+        settings: AICommandSettings?,
+        inputSource: AICommandInputSource
+    ) {
+        guard let settings else { return }
+        if inputHistoryStore.recordAICommandTranscriptIfNeeded(
+            transcript, settings: settings,
+            currentHistoryEnabled: settingsStore.settings.aiCommandSettings.historyEnabled,
+            inputSource: inputSource
+        ) != .saved {
+            noteHistoryStorageFailure()
+        }
+    }
+
+    private func processAICommand(transcript: String, session: VoiceSession) async {
+        guard let settings = session.aiCommandSettings else {
+            finishAICommandWithFailure(ownerID: session.id)
+            return
+        }
+        let languagePreferences = settingsStore.settings.languagePreferences
+        let directive = SpokenOutputLanguageDirective.parse(transcript)
+        let instructionForAI = directive?.transcriptWithoutDirective ?? transcript
+        let outputLanguage = OutputLanguageResolution.resolve(
+            transcript: transcript,
+            savedPreference: languagePreferences.aiOutputLanguage,
+            sttLanguage: languagePreferences.sttLanguage
+        )
+        if let clarification = AICommandInputPreflight.localClarification(
+            spokenInstruction: instructionForAI,
+            selectedText: session.selectedText,
+            language: languagePreferences.sttLanguage
+        ) {
+            guard !Task.isCancelled, !session.isCancelled, activeVoiceSession?.id == session.id else {
+                appState.setPhase(.idle)
+                hud.clearAICommandState()
+                hud.hide()
+                return
+            }
+            // 現在ページ・URL本文はアプリが取得していない。AIへ渡さず、
+            // 通常の結果ウィンドウで対象不足を明示する（本文を取得したと偽らない）。
+            appState.setPhase(.idle)
+            hud.clearAICommandState()
+            hud.hide()
+            activeVoiceSession = nil
+            showAICommandResult(
+                instruction: transcript,
+                selectedText: session.selectedText,
+                answer: clarification
+            )
+            return
+        }
+        appState.setPhase(.cleaning)
+        hud.showAICommandState(.processing)
+        let request = AICommandServiceRequest(
+            spokenInstruction: instructionForAI,
+            targetText: session.selectedText,
+            customInstruction: settings.additionalInstruction,
+            dictionaryEntries: personalDictionaryStore.enabledEntries,
+            sttLanguage: languagePreferences.sttLanguage,
+            outputLanguage: outputLanguage,
+            outputLanguageWasSpoken: directive != nil
+        )
+        let outcome = await aiCommandService.execute(request, operation: session.id) { [weak self] progress in
+            guard let self, self.ownsAICommandSession(session) else { return }
+            self.hud.showChunkProgress(completed: progress.completed, total: progress.total)
+        }
+        if activeVoiceSession?.id == session.id {
+            hud.clearChunkProgress()
+        }
+        guard !Task.isCancelled, !session.isCancelled, activeVoiceSession?.id == session.id else {
+            appState.setPhase(.idle)
+            hud.clearAICommandState()
+            hud.hide()
+            return
+        }
+
+        // `kind`（内容の意味）と、音声だけから決めた届け先を、既存の出力経路と
+        // 明示挿入の同意（録音開始時×現在）でここで初めて組み合わせる。
+        // 検査に通らない結果・失敗・時間切れは、選択文章や入力欄に触れない（CMD-09）。
+        switch AICommandDispatchPolicy.dispatch(
+            outcome,
+            hasActualSource: session.selectedText != nil,
+            explicitInsertionAllowedAtRecordingStart: session.aiCommandExplicitInsertionAllowedAtRecordingStart,
+            explicitInsertionAllowedNow: aiCommandExplicitInsertionAllowedAtCurrentSettings()
+        ) {
+        case .discard:
+            appState.setPhase(.idle)
+            hud.clearAICommandState()
+            hud.hide()
+        case .showMessage(let message):
+            appState.setPhase(.idle)
+            hud.clearAICommandState()
+            hud.hide()
+            showAICommandResult(
+                instruction: transcript,
+                selectedText: session.selectedText,
+                answer: uiText(AICommandMessages.messageKey(message))
+            )
+        case .showResult(let text, let notice, let note):
+            presentAICommandOutputResult(
+                text,
+                instruction: transcript,
+                session: session,
+                notice: note.map { note in
+                    [notice.map(aiCommandResultNoticeText), note.text(language: settingsStore.settings.languagePreferences.uiLanguage)]
+                        .compactMap { $0 }.joined(separator: "\n")
+                } ?? notice.map(aiCommandResultNoticeText)
+            )
+        case .automaticSourceReplacement(let text):
+            await insertAICommandOutput(
+                text,
+                instruction: transcript,
+                session: session,
+                operation: .automaticSourceReplacement(
+                    inputSource: session.inputSource,
+                    hasActualSource: session.selectedText != nil
+                )
+            )
+        case .explicitTargetInsertion(let text):
+            await insertAICommandOutput(
+                text,
+                instruction: transcript,
+                session: session,
+                operation: .explicitTargetInsertion
+            )
+        case .failure(let reason):
+            AppLog.shared.warn("[AICommand] 処理が失敗しました reason=\(reason.rawValue)")
+            hud.showAICommandState(.failure)
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            guard ownsAICommandSession(session) else { return }
+            appState.setPhase(.idle)
+            hud.clearAICommandState()
+            hud.hide()
+            showAICommandResult(
+                instruction: transcript,
+                selectedText: session.selectedText,
+                answer: AICommandMessages.reasonKeys(reason).map(uiText).joined(separator: " ")
+            )
+        }
+    }
+
+    private func aiCommandResultNoticeText(_ notice: AICommandResultNotice) -> String {
+        switch notice {
+        case .needsReview:
+            return uiText(AICommandMessages.needsReviewKey)
+        case .explicitInsertionNotPermitted:
+            return explicitTargetInsertionFallbackNotice()
+        }
+    }
+
+    private func ownsAICommandSession(_ session: VoiceSession) -> Bool {
+        !Task.isCancelled
+            && !session.isCancelled
+            && activeVoiceSession?.id == session.id
+    }
+
+    private func insertAICommandOutput(
+        _ text: String,
+        instruction: String,
+        session: VoiceSession,
+        operation: AICommandInsertionOperation
+    ) async {
+        let outputDestination = session.aiCommandOutputDestination
+        let compatibility = settingsStore.settings.externalAppCompatibilitySettings
+        let currentExplicitInsertionAllowed = compatibility.enabled
+            && compatibility.autoReplaceAICommandSelection
+        let isExplicitTargetInsertion: Bool
+        let allowExternalCompatibility: Bool
+        switch operation {
+        case .automaticSourceReplacement:
+            isExplicitTargetInsertion = false
+            // 自動source置換は既存契約を維持する。AXで置換できる場合は、互換入力を
+            // ONにしていなくても直接書込みを試せる。外部送出だけが既存同意を要する。
+            allowExternalCompatibility = session.allowsAIReplacement(currentAllowed: currentExplicitInsertionAllowed)
+        case .explicitTargetInsertion:
+            isExplicitTargetInsertion = true
+            // 経路選択時から送出時までの短い間に設定が変わっても権限を広げない。
+            guard session.aiCommandExplicitInsertionAllowedAtRecordingStart,
+                  currentExplicitInsertionAllowed else {
+                presentAICommandOutputResult(
+                    text,
+                    instruction: instruction,
+                    session: session,
+                    notice: explicitTargetInsertionFallbackNotice()
+                )
+                return
+            }
+            allowExternalCompatibility = true
+        }
+
+        guard let outputTarget = session.aiCommandOutputTarget else {
+            presentAICommandOutputResult(
+                text,
+                instruction: instruction,
+                session: session,
+                notice: isExplicitTargetInsertion ? explicitTargetInsertionFallbackNotice() : nil
+            )
+            return
+        }
+
+        // ADD-02: 選択文章の自動置換は、送出直前にAIが読んだ本文と置換対象を照合する。
+        // 不一致・未確認・非編集なら、どの入力経路にも進まず結果ウィンドウへ退避する。
+        let selectionDecision = await AICommandSelectionReplacementGuard.decide(
+            operation: operation,
+            selectedText: session.selectedText,
+            captureMethod: session.selectionCaptureMethod,
+            boundAtRecordingStop: session.aiCommandSelectionBoundAtRecordingStop,
+            temporaryCopyAllowedNow: session.allowsCompatibility(currentEnabled: compatibility.enabled),
+            verifyAccessibilitySelection: { expected in
+                outputDestination?.verifySelectedTextForReplacement(expected) ?? .unverifiable
+            },
+            checkTemporaryCopyDestination: {
+                outputDestination?.dispatchElementCheck() ?? .notCapturedAtStop
+            },
+            revalidateTemporaryCopySelection: { expected in
+                await self.selectedTextCapture.revalidateExternalSelection(
+                    expectedText: expected,
+                    target: outputTarget
+                )
+            }
+        )
+        guard ownsAICommandSession(session) else { return }
+        if case .routeToResultWindow(let verification) = selectionDecision {
+            AppLog.shared.info("[AICommand] 選択の照合に失敗したため結果ウィンドウへ退避します reason=\(verification)")
+            presentAICommandOutputResult(text, instruction: instruction, session: session)
+            return
+        }
+
+        let clipboardVariantEnabled = session.aiCommandSettings?.clipboardVariantEnabled == true
+            && settingsStore.settings.aiCommandSettings.clipboardVariantEnabled
+        let usesClipboardVariant: Bool
+        switch operation {
+        case .automaticSourceReplacement(let inputSource, let hasActualSource):
+            usesClipboardVariant = inputSource == .clipboard
+                && hasActualSource
+                && clipboardVariantEnabled
+        case .explicitTargetInsertion:
+            // 明示挿入は型上もclipboard sourceを持たず、variant pasteへは到達しない。
+            usesClipboardVariant = false
+        }
+
+        appState.setPhase(.inserting)
+        hud.showAICommandState(.success)
+        if usesClipboardVariant {
+            // ⌘Vは送出したら取り消せず、クリップボードは1秒後に復元される。
+            // 送出より前に回収先へ控えておかないと、Escapeでのキャンセルや
+            // session所有権の喪失で、利用者が出力を回収する手段を全て失う。
+            lastAICommandOutput = text
+        }
+        let insertionResult = await textInjector.insertAICommandOutput(
+            text,
+            forNormalTarget: outputTarget,
+            verificationDestination: outputDestination,
+            allowExternalCompatibility: allowExternalCompatibility
+                && aiCommandExplicitInsertionAllowedAtCurrentSettings(),
+            allowScopedClipboardFallback: session.allowsScopedClipboardFallback(
+                currentEnabled: settingsStore.settings.externalAppCompatibilitySettings.enabled,
+                currentAllowed: settingsStore.settings.externalAppCompatibilitySettings.allowScopedClipboardFallback
+            ),
+            operation: operation,
+            clipboardVariantEnabled: clipboardVariantEnabled
+        )
+        // 所有権を失った後でも、variant pasteの送出結果だけは必ず記録する。ここを
+        // `guard`より後に置くと、Escape時に「⌘Vを送ったか」が記録から消える。
+        if usesClipboardVariant {
+            AppLog.shared.info(
+                "[Telemetry] ai_command_clipboard_paste result=\(Self.describeSafeInsertionResult(insertionResult))"
+            )
+        }
+        guard ownsAICommandSession(session) else { return }
+        switch insertionResult {
+        case .inserted, .unicodeSubmitted, .scopedClipboardFallbackSubmitted,
+             .clipboardVariantPasteConfirmed, .clipboardVariantPasteSubmittedUnverified:
+            // 貼り付けが成功した時は、何も表示しない。Confirmed/Unverifiedの区別は
+            // テレメトリに残し、頻繁なポップアップは避ける。
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard ownsAICommandSession(session) else { return }
+            appState.setPhase(.idle)
+            hud.clearAICommandState()
+            hud.hide()
+        case .clipboardVariantPasteMayHaveLostClipboard,
+             .externalCompatibilityDisabled, .manualFallbackRequired, .insertionUnconfirmed,
+             .nonEditable, .selectionNotCollapsed, .targetChanged, .secureInputBlocked:
+            // 明示挿入の安全退避では本文と出典を保ち、本文コピーに混ざらないnoticeを付ける。
+            presentAICommandOutputResult(
+                text,
+                instruction: instruction,
+                session: session,
+                notice: isExplicitTargetInsertion ? explicitTargetInsertionFallbackNotice() : nil
+            )
+        case .payloadTooLongForDirectInsertion:
+            // 短い結果は入るのに長い結果だけ別ウィンドウへ出るのは、理由を伏せると
+            // 不具合に見える。挿入先の種類に関わらず、長さが原因であることを伝える。
+            presentAICommandOutputResult(
+                text,
+                instruction: instruction,
+                session: session,
+                notice: payloadTooLongInsertionFallbackNotice()
+            )
+        case .failed:
+            finishAICommandWithFailure(ownerID: session.id)
+        }
+    }
+
+    /// 停止時targetが無い・変化した・非編集だった場合、別のフォーカス先には書かず
+    /// いつものコピー可能な結果ウィンドウへ退避する。
+    private func presentAICommandOutputResult(
+        _ text: String,
+        instruction: String,
+        session: VoiceSession,
+        notice: String? = nil
+    ) {
+        guard !session.isCancelled else { return }
+        appState.setPhase(.idle)
+        hud.clearAICommandState()
+        hud.hide()
+        showAICommandResult(
+            instruction: instruction,
+            selectedText: session.selectedText,
+            answer: text,
+            notice: notice
+        )
+    }
+
+    private func explicitTargetInsertionFallbackNotice() -> String {
+        uiText("指定された入力先への挿入を安全に確認できなかったため、結果を別ウィンドウに表示しています。")
+    }
+
+    private func payloadTooLongInsertionFallbackNotice() -> String {
+        uiText("結果が長すぎて、この入力欄へ直接入力できませんでした。下の本文をコピーして貼り付けてください。")
+    }
+
+    private func showAICommandResult(
+        instruction: String,
+        selectedText: String?,
+        answer: String,
+        notice: String? = nil
+    ) {
+        aiCommandResultWindows.show(AICommandResultPayload(
+            spokenInstruction: instruction,
+            selectedText: selectedText,
+            answer: answer,
+            notice: notice
+        ))
+    }
+
+    /// 通常・ハンズフリーの、自動では入力・送信しなかった結果を表示する。
+    private func presentDictationResult(_ text: String, notice: DictationResultNotice) {
+        presentNormalInputFallback(
+            text,
+            notice: DictationCleanupMessages.noticeKeys(notice).map(uiText).joined(separator: "\n")
+        )
+    }
+
+    private func presentNormalInputFallback(_ text: String, notice: String? = nil) {
+        aiCommandResultWindows.show(AICommandResultPayload(
+            spokenInstruction: "",
+            selectedText: nil,
+            answer: text,
+            title: "音声入力結果",
+            notice: notice,
+            answerSectionTitle: "出力",
+            copyButtonTitle: "出力をコピー"
+        ))
+    }
+
+    /// 外部互換入力の同意を案内する。選択取得は録音開始前だけ再開できるが、
+    /// 完了済みの通常音声入力は再送・再貼り付けせず、出力をコピー可能な形で残す。
+    private func presentExternalCompatibilityGuide(
+        returnToProcessIdentifier: pid_t? = nil,
+        deferredNormalOutput: String? = nil,
+        aiCommandActions: [AICommandResultAction] = [],
+        afterEnable: (() -> Void)? = nil
+    ) {
+        let compatibilityExplanation = uiText("互換入力モードをONにすると、外部アプリでの選択取得と、クリップボードを変更しない仮想入力を使った直接入力を許可します。入力欄によっては反映を確認できないことがあります。")
+        let hasDeferredNormalOutput = deferredNormalOutput != nil
+        let enableCompatibilityAction = AICommandResultAction(
+            id: "enable-external-compatibility",
+            title: "互換入力を使う",
+            style: .primary,
+            handler: { [weak self] in
+                guard let self else { return }
+                self.settingsStore.settings.externalAppCompatibilitySettings.enabled = true
+                self.settingsStore.flushPendingSave()
+                if let returnToProcessIdentifier,
+                   returnToProcessIdentifier != ProcessInfo.processInfo.processIdentifier {
+                    _ = NSRunningApplication(processIdentifier: returnToProcessIdentifier)?.activate(
+                        options: []
+                    )
+                }
+                afterEnable?()
+            }
+        )
+        aiCommandResultWindows.show(AICommandResultPayload(
+            spokenInstruction: "",
+            selectedText: nil,
+            answer: deferredNormalOutput ?? compatibilityExplanation,
+            title: hasDeferredNormalOutput ? "音声入力結果" : "ブラウザや各種アプリへ対応",
+            notice: hasDeferredNormalOutput
+                ? uiText("この出力は自動で再試行しません。コピーして貼り付けるか、互換入力モードをONにしてからもう一度音声入力してください。")
+                : nil,
+            answerSectionTitle: hasDeferredNormalOutput ? "出力" : "互換入力について",
+            copyButtonTitle: "出力をコピー",
+            showsCopyButton: hasDeferredNormalOutput,
+            actions: [enableCompatibilityAction] + aiCommandActions
+        ))
+    }
+
+    /// 録音開始前の選択取得失敗は、赤いHUDだけで終わらせない。
+    /// 選択テキストは一切モデルへ渡さず、利用者が次に取れる安全な操作を示す。
+    private func presentAICommandCaptureGuidance(
+        for failure: SelectionCaptureFailure,
+        inputSource: AICommandInputSource,
+        allowsClipboardRecovery: Bool = true
+    ) {
+        // 結果パネルがItJustTalksを前面化する前に、復帰先を固定する。
+        let sourceProcessIdentifier = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        invalidateAICommandFailureDismissal()
+        appState.setPhase(.idle)
+        hud.clearAICommandState()
+        hud.hide()
+
+        if failure == .externalCompatibilityDisabled {
+            AppLog.shared.info("Web/Electron選択取得の互換入力は未同意のため案内を表示")
+            let actions = aiCommandCaptureGuidanceActions(
+                for: failure,
+                sourceProcessIdentifier: sourceProcessIdentifier,
+                inputSource: inputSource,
+                allowsClipboardRecovery: allowsClipboardRecovery
+            )
+            presentExternalCompatibilityGuide(
+                returnToProcessIdentifier: sourceProcessIdentifier,
+                aiCommandActions: actions
+            ) { [weak self] in
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(nanoseconds: 120_000_000)
+                    self?.startAICommandRecording(
+                        expectedFrontmostProcessIdentifier: sourceProcessIdentifier,
+                        inputSource: inputSource
+                    )
+                }
+            }
+            return
+        }
+
+        let message: String
+        let showsSettingsButton: Bool
+        switch failure {
+        case .externalCompatibilityDisabled:
+            // Handled above before building the generic result payload.
+            message = ""
+            showsSettingsButton = false
+        case .selectionUnsupported, .copyDidNotProduceText:
+            message = uiText("このウィンドウの選択テキストは安全に取得できません。選択を解除してAIへの質問として使うか、テキストを選択できるアプリで試してください。")
+            showsSettingsButton = false
+        case .accessibilityPermissionMissing:
+            message = uiText("AIに指示モードを使うにはアクセシビリティの許可が必要です。セットアップまたはシステム設定で、現在起動中のItJustTalksを許可してください。")
+            showsSettingsButton = true
+        case .secureInput:
+            message = uiText("安全な入力が有効なため、選択テキストを取得できません。パスワード入力などを閉じてから、もう一度試してください。")
+            showsSettingsButton = false
+        case .clipboardChanged, .clipboardRestoreFailed:
+            message = uiText("クリップボードを安全に保護できない状態だったため、選択テキストの処理を中止しました。少し待ってから、もう一度試してください。")
+            showsSettingsButton = false
+        case .focusedElementUnavailable:
+            message = uiText("現在のウィンドウから選択テキストを確認できませんでした。選択を解除してAIへの質問として使うか、別のアプリで試してください。")
+            showsSettingsButton = false
+        }
+
+        AppLog.shared.warn("AIに指示の選択取得を安全に中止: \(failure)")
+        let actions = aiCommandCaptureGuidanceActions(
+            for: failure,
+            sourceProcessIdentifier: sourceProcessIdentifier,
+            inputSource: inputSource,
+            allowsClipboardRecovery: allowsClipboardRecovery
+        )
+        aiCommandResultWindows.show(AICommandResultPayload(
+            spokenInstruction: "",
+            selectedText: nil,
+            answer: message,
+            title: uiText("AIに指示モード"),
+            showsSettingsButton: showsSettingsButton,
+            actions: actions
+        ))
+    }
+
+    private func aiCommandCaptureGuidanceActions(
+        for failure: SelectionCaptureFailure,
+        sourceProcessIdentifier: pid_t?,
+        inputSource: AICommandInputSource,
+        allowsClipboardRecovery: Bool
+    ) -> [AICommandResultAction] {
+        AICommandCaptureGuidanceActionPolicy.actions(
+            for: failure,
+            clipboardVariantEnabled: settingsStore.settings.aiCommandSettings.clipboardVariantEnabled,
+            hasSourceProcessIdentifier: sourceProcessIdentifier != nil,
+            allowsClipboardRecovery: allowsClipboardRecovery
+        ).compactMap { semanticAction in
+            switch semanticAction {
+            case .questionWithoutSelection:
+                return AICommandResultAction(
+                    id: AICommandCaptureGuidanceSemanticAction.questionWithoutSelection.rawValue,
+                    title: "選択なしで質問する",
+                    style: .primary,
+                    handler: { [weak self] in
+                        self?.startAICommandRecordingWithoutSelection(inputSource: inputSource)
+                    }
+                )
+            case .clipboardRecovery:
+                guard let sourceProcessIdentifier else { return nil }
+                return AICommandResultAction(
+                    id: AICommandCaptureGuidanceSemanticAction.clipboardRecovery.rawValue,
+                    title: "クリップボードの内容でAIに指示をする",
+                    style: .secondary,
+                    handler: { [weak self] in
+                        self?.resumeAICommandRecordingFromClipboard(
+                            sourceProcessIdentifier: sourceProcessIdentifier
+                        )
+                    }
+                )
+            }
+        }
+    }
+
+    private func resumeAICommandRecordingFromClipboard(sourceProcessIdentifier: pid_t) {
+        guard appState.phase == .idle else { return }
+        guard let sourceApplication = NSRunningApplication(
+            processIdentifier: sourceProcessIdentifier
+        ), sourceApplication.activate(options: []) else {
+            presentAICommandClipboardRecoveryFocusFailure()
+            return
+        }
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            // 即時一致に加え、50ms待機を最大10回行う。最長500ms。
+            for attempt in 0...10 {
+                guard !Task.isCancelled, self.appState.phase == .idle else { return }
+                if NSWorkspace.shared.frontmostApplication?.processIdentifier
+                    == sourceProcessIdentifier {
+                    self.startAICommandRecording(
+                        expectedFrontmostProcessIdentifier: sourceProcessIdentifier,
+                        inputSource: .clipboard
+                    )
+                    return
+                }
+                guard attempt < 10 else { break }
+                do {
+                    try await Task.sleep(nanoseconds: 50_000_000)
+                } catch {
+                    return
+                }
+            }
+            guard self.appState.phase == .idle else { return }
+            self.presentAICommandClipboardRecoveryFocusFailure()
+        }
+    }
+
+    private func presentAICommandClipboardRecoveryFocusFailure() {
+        guard appState.phase == .idle else { return }
+        AppLog.shared.warn("AIに指示のクリップボード復帰を中止: 元のアプリを前面化できませんでした")
+        aiCommandResultWindows.show(AICommandResultPayload(
+            spokenInstruction: "",
+            selectedText: nil,
+            answer: uiText("元のアプリに戻れなかったため、クリップボードの内容でAIに指示モードを開始しませんでした。元のアプリを前面にして、もう一度お試しください。"),
+            title: uiText("AIに指示モード"),
+            showsSettingsButton: false
+        ))
+    }
+
+    /// クリップボード読み取り失敗のログ・テレメトリ用の短い理由コード。
+    /// `\(decision)`は`.text`の本文を含みうるため、ログへ直接補間しない。
+    private func aiCommandClipboardReasonCode(for decision: ClipboardSourceReadPolicy.Decision) -> String {
+        switch decision {
+        case .text: return "ok"
+        case .empty: return "empty"
+        case .nonText: return "non_text"
+        case .rejectedSecureInput: return "rejected_secure_input"
+        case .rejectedConcealed: return "rejected_concealed"
+        case .rejectedSelfGenerated: return "rejected_self_generated"
+        case .tooLong: return "too_long"
+        }
+    }
+
+    /// クリップボード読み取り失敗の案内。`SelectionCaptureFailure`用の
+    /// `presentAICommandCaptureGuidance`とは別関数にする。クリップボード側は
+    /// 「選択なしで質問する」を出さないなど文言・後始末の形が異なり、
+    /// `SelectionCaptureFailure`のケースを増やさずに済ませるため。
+    private func presentAICommandClipboardCaptureGuidance(
+        for decision: ClipboardSourceReadPolicy.Decision
+    ) {
+        invalidateAICommandFailureDismissal()
+        appState.setPhase(.idle)
+        hud.clearAICommandState()
+        hud.hide()
+
+        guard let message = ClipboardSourceGuidanceCopy.message(for: decision, language: uiLanguage) else {
+            return
+        }
+        aiCommandResultWindows.show(AICommandResultPayload(
+            spokenInstruction: "",
+            selectedText: nil,
+            answer: message,
+            title: uiText("AIに指示モード"),
+            showsSettingsButton: false
+        ))
+    }
+
+    private func finishAICommandWithFailure(ownerID: UUID) {
+        invalidateAICommandFailureDismissal()
+        aiCommandFailureOwnership.present(ownerID: ownerID)
+        // M5失敗はこの所有IDと単一タイマーで完結させ、
+        // AppState.errorの一般用3秒自動復帰と競合させない。
+        appState.setPhase(.idle)
+        hud.showAICommandState(.failure)
+        aiCommandFailureDismissTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard !Task.isCancelled,
+                  let self,
+                  self.aiCommandFailureOwnership.isOwned(by: ownerID) else { return }
+            self.dismissAICommandFailure()
+        }
+    }
+
+    private func invalidateAICommandFailureDismissal() {
+        aiCommandFailureDismissTask?.cancel()
+        aiCommandFailureDismissTask = nil
+        aiCommandFailureOwnership.clear()
+    }
+
+    private func dismissAICommandFailure() {
+        invalidateAICommandFailureDismissal()
+        appState.setPhase(.idle)
+        hud.clearAICommandState()
+        hud.hide()
+    }
+
+    private func recordInputHistoryIfNeeded(
+        mode: String,
+        historyEnabled: Bool,
+        historyRetentionDays: Int,
+        textToInsert: String,
+        cleanupEnabled: Bool,
+        cleanupDidFail: Bool,
+        insertResult: TextInjectorResult,
+        cleanupLatencyMs: Int?
+    ) {
+        if inputHistoryStore.recordNormalInputIfNeeded(
+            mode: mode, historyEnabled: historyEnabled, historyRetentionDays: historyRetentionDays,
+            textToInsert: textToInsert, cleanupEnabled: cleanupEnabled, cleanupDidFail: cleanupDidFail,
+            insertResult: insertResult, cleanupLatencyMs: cleanupLatencyMs
+        ) != .saved {
+            noteHistoryStorageFailure()
+        }
+    }
+
+    func clearHistoryStorageNoticeIfRecovered() {
+        guard !personalDictionaryStore.requiresRecovery else { return }
+        switch inputHistoryStore.loadStatus {
+        case .missing, .ready: storageNotice = nil
+        case .malformed, .unreadable: break
+        }
+    }
+
+    private func noteHistoryStorageFailure() {
+        guard !personalDictionaryStore.requiresRecovery else { return }
+        storageNotice = "履歴を保存または整理できませんでした。音声入力の結果は取り消していません。設定の履歴を確認してください。"
+    }
+
+    private func logNormalInputCompletion(
+        result: TextInjectorResult,
+        cleanupLatencyMs: Int?,
+        insertionStartedAt: Date
+    ) {
+        let resultName: String
+        switch result {
+        case .inserted, .unicodeSubmitted, .scopedClipboardFallbackSubmitted:
+            resultName = InputHistoryInsertStatus.inserted
+        default:
+            return
+        }
+        completedNormalInputCount += 1
+        let insertionLatencyMs = Int((Date().timeIntervalSince(insertionStartedAt) * 1_000).rounded())
+        let cleanupLatencyDescription = cleanupLatencyMs.map(String.init) ?? "none"
+        AppLog.shared.info(
+            "[Telemetry] normal_input_completed count=\(completedNormalInputCount) "
+                + "cleanupMs=\(cleanupLatencyDescription) insertionMs=\(insertionLatencyMs) result=\(resultName)"
+        )
+    }
+
+    // MARK: - CLIテストモード
+
+    private func handleCLITestModeIfRequested() -> Bool {
+        let args = CommandLine.arguments
+
+        if let idx = args.firstIndex(of: "--test-stt"), idx + 1 < args.count {
+            let path = args[idx + 1]
+            runTestSTT(path)
+            return true
+        }
+
+        if let idx = args.firstIndex(of: "--test-stt-repeat"), idx + 2 < args.count,
+           let count = Int(args[idx + 1]), count > 0 {
+            let path = args[idx + 2]
+            runTestSTTRepeat(count: count, path: path)
+            return true
+        }
+
+        return false
+    }
+
+    private func runTestSTT(_ path: String) {
+        Task {
+            print("=== ItJustTalks --test-stt ===")
+            print("音声ファイル: \((path as NSString).lastPathComponent)")
+            let url = URL(fileURLWithPath: path)
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                print("エラー: ファイルが見つかりません")
+                exit(1)
+            }
+            do {
+                let warmupStart = Date()
+                try await transcriptionEngine.warmUp()
+                print(String(format: "ウォームアップ所要時間: %.2f秒", Date().timeIntervalSince(warmupStart)))
+
+                let recognizeStart = Date()
+                let result = try await transcriptionEngine.transcribeFile(url: url)
+                let elapsed = Date().timeIntervalSince(recognizeStart)
+                print("文字起こし結果: \(result.count)文字")
+                print(String(format: "認識所要時間: %.2f秒", elapsed))
+                exit(0)
+            } catch {
+                print("エラー: \(AppLog.safeDescription(error))")
+                exit(1)
+            }
+        }
+    }
+
+    private func runTestSTTRepeat(count: Int, path: String) {
+        Task {
+            print("=== ItJustTalks --test-stt-repeat \(count) ===")
+            print("音声ファイル: \((path as NSString).lastPathComponent)")
+            let url = URL(fileURLWithPath: path)
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                print("エラー: ファイルが見つかりません")
+                exit(1)
+            }
+            do {
+                let warmupStart = Date()
+                try await transcriptionEngine.warmUp()
+                print(String(format: "ウォームアップ所要時間: %.2f秒", Date().timeIntervalSince(warmupStart)))
+
+                for i in 1...count {
+                    let recognizeStart = Date()
+                    let result = try await transcriptionEngine.transcribeFile(url: url)
+                    let elapsed = Date().timeIntervalSince(recognizeStart)
+                    print("--- \(i)回目 ---")
+                    print("文字起こし結果: \(result.count)文字")
+                    print(String(format: "認識所要時間: %.2f秒", elapsed))
+                }
+                exit(0)
+            } catch {
+                print("エラー: \(AppLog.safeDescription(error))")
+                exit(1)
+            }
+        }
+    }
+}
+
+/// Combine Cancellableを型消去して保持するための軽量ラッパー（新規importを増やさないため）。
+final class AnyObjectHolder {
+    private let object: Any
+    init(_ object: Any) { self.object = object }
+}

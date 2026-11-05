@@ -1,0 +1,42 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Python test caches
+__pycache__/
+*.py[cod]
+
+# Xcode
+*.xcodeproj/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# macOS
+.DS_Store
+
+# Build artifacts
+dist/
+
+# Local working materials (drafts, notes, experiment output). Never commit.
+notes/
+plans/
+spikes/
+Reference/
+
+# Secrets / auth — 絶対にコミットしない
+*.auth
+auth.json
+.env
+*.p12
+*.pem
+*.key
+*.cer
+
+# ItJustTalks: 実データを含みうる評価素材と評価結果の生出力 — コミットしない
+local-eval/
+eval-output/
+
+# Claude Code のローカル専用設定
+.claude/settings.local.json

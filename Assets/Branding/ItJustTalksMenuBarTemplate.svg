@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 1024 1024" color="#000">
+  <defs>
+<mask id="k25" maskUnits="userSpaceOnUse" x="-100" y="-100" width="1300" height="1300">
+      <rect x="-100" y="-100" width="1300" height="1300" fill="#fff"/>
+      <circle cx="512" cy="462" r="66" fill="#000"/>
+      <circle cx="512" cy="462" r="150" fill="none" stroke="#000" stroke-width="52"/>
+    </mask>
+  </defs>
+<g transform="translate(512 512) scale(1.4) translate(-512 -530)">
+        <g mask="url(#k25)" fill="currentColor">
+          <rect x="212" y="232" width="600" height="460" rx="160"/>
+          <path d="M 290 640 L 268 818 Q 266 842 288 826 L 470 690 Z"/>
+        </g>
+      </g>
+</svg>

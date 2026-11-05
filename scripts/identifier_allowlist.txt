@@ -1,0 +1,32 @@
+# Allowlist for scripts/check_identifiers.sh.
+# Format: one repository-relative path glob per line, then "#" and the reason.
+# A "*" matches any characters including "/". Keep this list short: general
+# source code must never be allowlisted -- rename the identifier instead.
+
+# Attribution required by the upstream Apache-2.0 license.
+LICENSE                                   # upstream license text / attribution
+NOTICE                                    # upstream attribution notice
+
+# Evaluation notes that cite upstream prompt sources as ground truth.
+Evaluation/README.md                      # evaluation design notes citing upstream prompt sources
+
+# User-facing documents that describe the upstream project and coexistence with it.
+README.md                                 # project overview and attribution
+README.ja.md                              # project overview and attribution (Japanese)
+CONTRIBUTING.md                           # contribution guide
+SECURITY.md                               # security policy
+CODE_OF_CONDUCT.md                        # code of conduct
+docs/manual/*                             # user manual
+docs/agent-install-prompt.md              # install guide for agents
+docs/agent-update-prompt.md               # update guide for agents
+
+# Test sandbox that must name upstream storage paths in order to deny them.
+scripts/dev/koedex-deny.sb                # sandbox profile denying upstream storage
+scripts/dev/run_regressions_sandboxed.sh  # sandbox runner self-check against upstream storage
+
+# Upstream-running detection must name the upstream bundle IDs.
+Sources/ItJustTalks/Support/UpstreamAppCoexistence.swift  # detects the upstream app at launch
+
+# The checker itself.
+scripts/check_identifiers.sh              # contains the search pattern
+scripts/identifier_allowlist.txt          # this file

@@ -1,0 +1,10 @@
+;; Deny all access to Koedex user data and ~/.codex while running ItJustTalks
+;; regression tests before storage separation (P2). Never chmod/ACL Koedex data.
+;; Usage: sandbox-exec -D HOME="$HOME" -f scripts/dev/koedex-deny.sb <command>
+(version 1)
+(allow default)
+(deny file-read* file-write*
+  (prefix (string-append (param "HOME") "/Library/Application Support/Koedex"))
+  (prefix (string-append (param "HOME") "/Library/Preferences/com.koedex."))
+  (subpath (string-append (param "HOME") "/.codex")))
+(deny network-outbound (remote ip))

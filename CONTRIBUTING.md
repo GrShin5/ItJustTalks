@@ -12,9 +12,12 @@ the project, run its checks, and prepare a pull request.
   all require macOS 27.
 - Swift 6.4 or later (the manifest uses tools version 6.4) with the macOS 27 SDK.
 - Apple Silicon, Apple Intelligence enabled, and on-device models ready
-  for end-to-end AI checks. Verified on Apple M5 Max (64GB memory). M1 (8GB) is planned.
+  for end-to-end AI checks. Verified on Apple M5 Max (64GB memory). Also installed and used on an Apple M1
+  MacBook Air (8GB memory).
   Core 3 Macs are unverified.
-- Git and OpenSSL 3 for initial signing certificate creation.
+- Command Line Tools (includes Git) are enough; full Xcode, Homebrew and
+  OpenSSL 3 are not required. Certificate creation uses OpenSSL 3 when present,
+  otherwise the LibreSSL included with macOS.
 
 ## Building
 
@@ -39,6 +42,7 @@ swift test
 bash scripts/check_identifiers.sh
 bash scripts/dev/check_privacy.sh
 bash scripts/dev/test_check_privacy.sh
+bash scripts/dev/test_install_scripts.sh
 ```
 
 The regression suite does not require external AI or network access.

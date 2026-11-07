@@ -34,7 +34,7 @@ The app is designed not to communicate over the network for its processing. Appl
 | --- | --- |
 | OS | macOS 27 or later. The on-device AI uses Apple Foundation Models APIs that first appear in macOS 27, so the package, the app and the preflight check all require 27 |
 | AI | Apple Silicon, Apple Intelligence enabled, and an on-device model ready. **Your Mac and Siri must use the same language supported by Apple Intelligence**; AI does not work if they differ. Check them in System Settings under General > Language & Region and under Apple Intelligence & Siri (or Siri, depending on your Mac). Preparation may take some time after you change either language. Check availability on the actual Mac |
-| Memory and hardware | No minimum RAM or chip-by-chip guarantee. Verified on Apple M5 Max (64GB memory). M1 (8GB) is planned. |
+| Memory and hardware | No minimum RAM or chip-by-chip guarantee. Verified on Apple M5 Max (64GB memory). Also installed and used on an Apple M1 MacBook Air (8GB memory). |
 | Core 3 Macs | **Unverified** |
 | Languages | UI and speech recognition: Japanese / English. AI output: Automatic / Japanese / English; an explicitly spoken output language takes priority. Other AI languages and their quality are not guaranteed |
 | Permissions | Microphone, Speech Recognition, Accessibility. For apps that cannot accept direct insertion, copy from the result window |

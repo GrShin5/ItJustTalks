@@ -50,29 +50,29 @@ struct OnboardingView: View {
     @StateObject private var practiceController: OnboardingPracticeController
     @StateObject private var shortcutCapture = HotkeyCaptureMonitor()
     @StateObject private var restartCoordinator = OnboardingRestartCoordinator()
-    @State private var currentStepIndex = 0
-    @State private var activeShortcutTarget: ShortcutTarget?
-    @State private var normalShortcutCandidate: HotkeyBinding?
-    @State private var aiStartShortcutCandidate: HotkeyBinding?
-    @State private var aiStopShortcutCandidate: HotkeyBinding?
-    @State private var normalShortcutMessage: String?
-    @State private var aiStartShortcutMessage: String?
-    @State private var aiStopShortcutMessage: String?
-    @State private var normalShortcutState = OnboardingShortcutSetupState()
-    @State private var aiStartShortcutState = OnboardingShortcutSetupState()
-    @State private var aiStopShortcutState = OnboardingShortcutSetupState()
-    @State private var selectedMicrophoneUID = ""
-    @State private var microphoneCheckState: OnboardingMicrophoneCheckState = .idle
-    @State private var microphoneCheckGeneration = UUID()
-    @State private var microphoneProbeOperation: Task<Void, Never>?
-    @State private var appQuitFeedback: String?
-    @State private var showsAppQuitConfirmation = false
-    @State private var didAcknowledgeForcedInitialStep = false
-    @State private var didReportInitialStep = false
-    @State private var hasMoreScrollableContent = false
-    @State private var clipboardVariantOnboardingMessage: String?
-    @State private var appleIntelligenceStatus: AppleIntelligenceStatus = .unavailable
-    @State private var showsCore3Notice = false
+    @ViewState private var currentStepIndex = 0
+    @ViewState private var activeShortcutTarget: ShortcutTarget?
+    @ViewState private var normalShortcutCandidate: HotkeyBinding?
+    @ViewState private var aiStartShortcutCandidate: HotkeyBinding?
+    @ViewState private var aiStopShortcutCandidate: HotkeyBinding?
+    @ViewState private var normalShortcutMessage: String?
+    @ViewState private var aiStartShortcutMessage: String?
+    @ViewState private var aiStopShortcutMessage: String?
+    @ViewState private var normalShortcutState = OnboardingShortcutSetupState()
+    @ViewState private var aiStartShortcutState = OnboardingShortcutSetupState()
+    @ViewState private var aiStopShortcutState = OnboardingShortcutSetupState()
+    @ViewState private var selectedMicrophoneUID = ""
+    @ViewState private var microphoneCheckState: OnboardingMicrophoneCheckState = .idle
+    @ViewState private var microphoneCheckGeneration = UUID()
+    @ViewState private var microphoneProbeOperation: Task<Void, Never>?
+    @ViewState private var appQuitFeedback: String?
+    @ViewState private var showsAppQuitConfirmation = false
+    @ViewState private var didAcknowledgeForcedInitialStep = false
+    @ViewState private var didReportInitialStep = false
+    @ViewState private var hasMoreScrollableContent = false
+    @ViewState private var clipboardVariantOnboardingMessage: String?
+    @ViewState private var appleIntelligenceStatus: AppleIntelligenceStatus = .unavailable
+    @ViewState private var showsCore3Notice = false
 
     private var uiLanguage: AppLanguage {
         settingsStore.settings.languagePreferences.uiLanguage

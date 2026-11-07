@@ -161,8 +161,8 @@ struct RecordingHUDView: View {
     var onCancel: () -> Void = {}
     var onFinish: () -> Void = {}
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var errorBorderFlash = false
-    @State private var errorBorderResetTask: Task<Void, Never>?
+    @ViewState private var errorBorderFlash = false
+    @ViewState private var errorBorderResetTask: Task<Void, Never>?
 
     var body: some View {
         HStack(spacing: 12) {
@@ -449,7 +449,7 @@ private extension PipelinePhase {
 
 private struct SparkleProcessing: View {
     let reduceMotion: Bool
-    @State private var pulse = false
+    @ViewState private var pulse = false
     var body: some View {
         Image(systemName: "sparkles")
             .font(.system(size: 19, weight: .medium))
@@ -484,7 +484,7 @@ private struct HUDCircleButton: View {
     let language: AppLanguage
     let glyphScale: CGFloat
     let action: () -> Void
-    @State private var isHovered = false
+    @ViewState private var isHovered = false
 
     var body: some View {
         Button(action: action) {
@@ -542,7 +542,7 @@ private struct HUDCircleButtonStyle: ButtonStyle {
 
 private struct StartingDot: View {
     let reduceMotion: Bool
-    @State private var animate = false
+    @ViewState private var animate = false
 
     var body: some View {
         Circle()
@@ -600,7 +600,7 @@ enum WaveformRedrawCadencePolicy {
 private struct RecordingWaveform: View {
     let level: Double
     let reduceMotion: Bool
-    @State private var smoother = WaveformSmoother()
+    @ViewState private var smoother = WaveformSmoother()
 
     private let envelope: [Double] = [0.35, 0.55, 0.75, 0.92, 1.0, 0.92, 0.75, 0.55, 0.35]
     private let frequencies: [Double] = [1.7, 2.3, 1.3, 2.9, 2.1, 2.6, 1.5, 2.4, 1.9]
@@ -655,7 +655,7 @@ private struct RecordingWaveform: View {
 private struct HandsFreeSendWaveform: View {
     let level: Double
     let reduceMotion: Bool
-    @State private var smoother = WaveformSmoother()
+    @ViewState private var smoother = WaveformSmoother()
 
     private let envelope: [Double] = [0.30, 0.52, 0.76, 0.94, 1.0, 0.94, 0.76, 0.52, 0.30]
 
@@ -696,7 +696,7 @@ private struct HandsFreeSendWaveform: View {
 private struct HandsFreeSendCandidateWaveform: View {
     let level: Double
     let reduceMotion: Bool
-    @State private var pulse = false
+    @ViewState private var pulse = false
 
     var body: some View {
         ZStack {
@@ -745,8 +745,8 @@ private struct HandsFreeSendConfirmedProcessingGlyph: View {
 /// 同時に全不透明度で開始する。
 private struct HandsFreeSendConvergingWaveform: View {
     let reduceMotion: Bool
-    @State private var converged = false
-    @State private var pulsed = false
+    @ViewState private var converged = false
+    @ViewState private var pulsed = false
 
     var body: some View {
         ZStack {
@@ -798,8 +798,8 @@ private enum HandsFreeSendReturnGlyphState {
 private struct HandsFreeSendReturnGlyph: View {
     let state: HandsFreeSendReturnGlyphState
     let reduceMotion: Bool
-    @State private var pressed = false
-    @State private var visible = false
+    @ViewState private var pressed = false
+    @ViewState private var visible = false
 
     var body: some View {
         Group {
@@ -855,7 +855,7 @@ private struct ThinkingDot: View {
     let index: Int
     let color: Color
     let reduceMotion: Bool
-    @State private var animate = false
+    @ViewState private var animate = false
 
     var body: some View {
         Circle()
@@ -877,9 +877,9 @@ private struct ThinkingDot: View {
 
 private struct InsertingBar: View {
     let reduceMotion: Bool
-    @State private var expanded = false
-    @State private var opacityOn = false
-    @State private var fallbackPulse = false
+    @ViewState private var expanded = false
+    @ViewState private var opacityOn = false
+    @ViewState private var fallbackPulse = false
 
     var body: some View {
         Capsule()
@@ -902,7 +902,7 @@ private struct InsertingBar: View {
 
 private struct ErrorGlyph: View {
     let reduceMotion: Bool
-    @State private var animate = false
+    @ViewState private var animate = false
 
     var body: some View {
         Image(systemName: "exclamationmark")

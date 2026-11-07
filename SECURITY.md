@@ -24,7 +24,7 @@ Include as much detail as you can:
 
 ## Supported versions
 
-This documentation targets ItJustTalks 0.1.0. There is no formal support
+This documentation targets ItJustTalks 0.1.1. There is no formal support
 matrix; only the latest published release is supported. When a release tag
 is available, reproduce against a fresh build from that tag, obtained and
 verified as described in the README, before reporting.

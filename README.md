@@ -2,7 +2,7 @@
 
 [日本語](README.ja.md) · [Japanese manual](docs/manual/ja.md) · [English manual](docs/manual/en.md)
 
-ItJustTalks 0.1.0 is a completely free, fully local voice input and writing assistant for macOS 27. It transcribes and cleans up speech, edits, translates or summarizes selected or copied text, and helps draft writing. Derived from Koedex by the same developer and licensed under Apache-2.0, it uses only the on-device model in Apple Foundation Models. No external AI subscription or API key is required.
+ItJustTalks 0.1.1 is a completely free, fully local voice input and writing assistant for macOS 27. It transcribes and cleans up speech, edits, translates or summarizes selected or copied text, and helps draft writing. Derived from Koedex by the same developer and licensed under Apache-2.0, it uses only the on-device model in Apple Foundation Models. No external AI subscription or API key is required.
 
 <p align="center">
   <img src="docs/manual/images/en/onboarding-02-welcome.png" width="420" alt="Welcome screen of the first-time setup">
@@ -50,22 +50,19 @@ See [Chapter 3: Requirements and known limitations](docs/manual/en.md#chapter-3)
 
 ## Install and update
 
-Distribution is by building from source and signing with a self-signed certificate on this Mac. Git, development tools supporting macOS 27 (Swift 6.4 or later with the macOS 27 SDK), OpenSSL 3 for certificate creation (for example, `brew install openssl@3` with Homebrew), and an account that can write to the Applications folder (normally an administrator account) are required. Preflight's Swift 6.4 minimum does not guarantee SDK compatibility.
+Build from source and self-sign on this Mac. Developer ID signing and notarization through the Apple Developer Program are not used.
 
-Get the source with `git clone https://github.com/GrShin5/ItJustTalks`, not a ZIP download. Keep it outside Desktop, Documents, iCloud Drive, and File Provider storage, for example at `~/Developer/ItJustTalks`. Otherwise preflight fails and the build stops.
+Requires macOS 27 or later. AI features require Apple silicon, Apple Intelligence turned on, a ready model, and matching Mac and Siri languages. Command Line Tools (Apple tools for building from commands, including Git) are sufficient. Full Xcode is not required (Xcode 27 also works). No Homebrew or OpenSSL 3 installation is needed. You need an account that can write to /Applications (normally an administrator) and 2 GB free space.
 
-Read [Appendix B's preparation and cautions](docs/manual/en.md#appendix-b), then run these commands in the source folder in order. Review certificate creation, Keychain registration, and authentication before approving them.
+Get the source with `git clone https://github.com/GrShin5/ItJustTalks`, not ZIP. Use a folder outside Desktop, Documents, iCloud Drive and File Provider storage, such as `~/Developer/ItJustTalks`.
+
+Read [Appendix B](docs/manual/en.md#appendix-b), then run in the source folder. Appendix B also covers the individual scripts.
 
 ```sh
-bash scripts/preflight.sh
-bash scripts/make_signing_cert.sh
-bash scripts/make_app.sh release
-bash scripts/verify_app_identity.sh dist/ItJustTalks.app
-bash scripts/preflight.sh --install
-bash scripts/install_app.sh
+bash scripts/install.sh
 ```
 
-Script messages follow the locale (LC_ALL, LC_MESSAGES, or LANG) and are in Japanese when it is unset, C, or POSIX; run them with `ITJUSTTALKS_LANG=en` (for example, `ITJUSTTALKS_LANG=en bash scripts/preflight.sh`) to get English output.
+If certificate work is needed, it stops with exit 3. `--allow-signing-cert` means you agree to certificate creation, registration and code-signing-only trust. After reviewing this, run `bash scripts/install.sh --allow-signing-cert` and approve the macOS authentication dialog yourself. Output follows `ITJUSTTALKS_LANG=ja` / `en`, otherwise the locale; unset, C or POSIX means Japanese.
 
 Stop on errors. Reuse a valid existing identity and keep verification enabled. The installer does not overwrite an existing app. The [install prompt](docs/agent-install-prompt.en.md) and [Appendix A](docs/manual/en.md#appendix-a), or [update prompt](docs/agent-update-prompt.en.md) and [Appendix D](docs/manual/en.md#appendix-d), provide agent-assisted instructions. To update without an agent, see [Appendix D](docs/manual/en.md#appendix-d). An AI coding agent is not needed for normal app use.
 

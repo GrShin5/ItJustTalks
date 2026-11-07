@@ -92,7 +92,7 @@ AIが使えない場合でも、音声認識が成功すれば通常モードで
 | 表示言語 | 日本語・English。音声認識言語とは別に選べます |
 | AI出力言語 | 自動・日本語・English。音声で明示した出力言語が設定より優先されます |
 | その他のAI言語 | 対応言語の完全な一覧と品質は保証できません。音声認識の対応とは別です |
-| 確認状況 | Apple M5 Max（メモリ64GB）で確認。M1（メモリ8GB）は確認予定 |
+| 確認状況 | 0.1.0はApple M1 MacBook Air（メモリ8 GB、macOS 27.2、フルXcode 27.2）で導入済みです。0.1.1はCommand Line Toolsだけで、Apple M5 Maxでのビルドと、Apple M1 MacBook Air（macOS 27.2）での新規導入を確認済みです。OpenSSL 3がないMacでの導入は未確認です。Core 3搭載Macは未確認です。 |
 | Core 3搭載機 | 未確認。動作するとは案内していません |
 
 AIが非対応でも音声入力・文字起こしを使える場合があります。音声認識自体の対応や権限は別に必要です。
@@ -161,25 +161,21 @@ AIが元の言い回しを短くすることがあります。長文の翻訳・
 <a id="chapter-4"></a>
 ## 4. 入手とインストール
 
-この説明書では、ソースからアプリを組み立て、このMacの自己署名証明書で署名してインストールする方式を扱います。配布元から入手したソースの作業フォルダで、次の順に実行します。詳しい準備と操作は[付録B](#appendix-b)で説明します。
+このMacでソースから組み立て、自己署名して導入します。自己署名とは、このMacで作った証明書でアプリの署名を付けることです。Developer ID署名・公証（Appleによる配布用の確認）は使いません。
 
-ソースはZIPダウンロードではなく、`git clone https://github.com/GrShin5/ItJustTalks`で取得してください。Desktop・Documents・iCloud Drive・File Providerの配下を避け、例えば`~/Developer/ItJustTalks`に配置します。条件を満たさないと事前確認が失敗し、ビルドも停止します。
+macOS 27以上、AI機能にはApple silicon、Apple Intelligenceの有効化、モデル準備、MacとSiriの言語の一致が必要です。Command Line Tools（コマンドで開発するためのApple製ツール。Gitを含む）だけで導入できます。フルXcodeは不要です（Xcode 27も使用可）。Homebrew・OpenSSL 3の追加導入も不要です。/Applicationsへ書き込めるアカウント（通常は管理者）と2 GBの空き容量が必要です。
+
+ソースはZIPではなく `git clone https://github.com/GrShin5/ItJustTalks` で取得します。Desktop・Documents・iCloud Drive・File Provider配下を避け、例えば `~/Developer/ItJustTalks` に置きます。
+
+[付録B](#appendix-b)を読み、ソースフォルダで実行します。
 
 ```sh
-bash scripts/make_signing_cert.sh
-bash scripts/make_app.sh release
-bash scripts/install_app.sh
+bash scripts/install.sh
 ```
 
-1. `make_signing_cert.sh`は署名用の証明書をログインキーチェーンに作成・登録します。信頼設定の認証画面は、内容を確認して承認します。既存の有効な証明書は再利用します。
-2. `make_app.sh release`は事前確認、ビルド、リソースの組み込み、署名と検証を行い、`dist/ItJustTalks.app`を作ります。引数を省くとdebugになるため、`release`を付けてください。
-3. `install_app.sh`は検証したアプリをApplicationsフォルダに配置します。既存のアプリや同名の項目は上書きしません。更新時にそのまま重ねて実行できる手順ではありません。
+証明書の作成・登録とコード署名だけの信頼設定が必要なら終了3で停止します。同意したら `bash scripts/install.sh --allow-signing-cert` を実行します。macOSの認証画面（1〜2回出ることがあります）は自分で承認してください。ツールの確認を先に行い、ビルド・署名検証・配置まで進みます。既存アプリは上書き・移動しません。更新は[付録D](#appendix-d)を使います。
 
-事前確認だけなら`bash scripts/preflight.sh`を使えます。インストール前の確認用には`bash scripts/preflight.sh --install`もあります。インストール用スクリプト自身は、この事前確認を呼びません。
-
-作成時にはOpenSSL 3、ビルドには開発用ツールが必要です。事前確認はSwift 6.4以上などを確認しますが、それだけでmacOS 27のAI機能をビルドできる保証にはなりません。対応するXcode・Command Line Toolsの正確な版は未確認です。初回からビルド完了までの所要時間も保証しません。
-
-署名は更新後も同じものを使います。署名の不一致で停止した時は、確認を省略して続行せず、案内を確認してください。
+導入後はFinderから起動し、[初回セットアップ](#chapter-5)を行います。導入成功は実機テスト合格ではありません。
 
 <a id="chapter-5"></a>
 ## 5. 初回セットアップ
@@ -878,30 +874,45 @@ AIに指示の履歴に残るのは、話した指示の文字起こしです。
 <a id="appendix-a"></a>
 ## 付録A：AIエージェントに導入を任せる
 
-ターミナル操作に不慣れな場合は、Macの作業フォルダを扱い、コマンドを実行できるAIエージェントに導入作業を任せられます。アプリの通常利用にAIエージェントは必要ありません。
+ターミナル操作に不慣れなら、[導入プロンプト](../agent-install-prompt.md)のコードブロック全体を、Macのフォルダとコマンドを扱えるAIエージェントへ渡します。通常利用にエージェントは不要です。
 
-1. [導入プロンプト](../agent-install-prompt.md)を開きます。取得元は`https://github.com/GrShin5/ItJustTalks`です。
-2. エージェントで同期対象外のローカル作業フォルダを選び、コードブロック全体を貼り付けます。
-3. 事前確認の結果を読みます。証明書の新規作成が必要な場合は、キーチェーン登録と署名の信頼設定の説明を確認してから承認します。macOSの認証・許可は自分で操作します。
-4. ビルド・署名・配置の検証結果を確認し、Finderから起動して[5章の初回セットアップ](#chapter-5)を行います。
+1. エージェントがOS・開発ツール・保存先・既存アプリを読取りだけで確認します。
+2. cloneと作業フォルダへの書込み、証明書の作成・登録とコード署名だけの信頼、/Applicationsへの配置、必要なら対象インストールスクリプトだけのサンドボックス外実行を、1通にまとめて承認します。希望しなければ停止します。
+3. 自分で操作する画面は、不足時だけのCommand Line Tools導入画面、キーチェーンの認証画面（Touch ID／パスワード。導入中に1〜2回出ることがあり、どれも自分で承認します）、導入後のFinder起動とマイク・音声認識・アクセシビリティの許可画面です。証明書の手動作成は通常不要です。
+4. 結果を確認し、Apple Intelligence、モデル準備、MacとSiriの言語一致を確認して、短い合成文を試します。導入成功は実機テスト合格ではありません。
 
-プロンプトはデータのアップロード、セキュリティ設定の変更、Koedexのデータ操作を禁止しています。実際の発話、メール、辞書、履歴を貼り付ける必要はありません。導入を助ける外部ツールの通信は、ItJustTalksの端末内AI処理とは別です。手動の手順は[付録B](#appendix-b)を参照してください。
+発話・メール・辞書・履歴の添付やアップロードは不要です。プロンプトは保護設定の弱体化とKoedexへの操作を禁止します。エージェント自身の通信はアプリの端末内AI処理とは別です。
 
 <a id="appendix-b"></a>
 ## 付録B：自分でソースからビルドする
 
 ### 用意するもの
 
-- macOS 27のMac。AIの利用条件は[3章](#chapter-3)を確認してください。
-- Xcode（macOS 27 対応版）または Command Line Tools。
-- Gitと、証明書作成に使うOpenSSL 3。OpenSSL 3がない場合、事前確認は`brew install openssl@3`を案内します（Homebrewが必要）。
-- アプリケーションフォルダへ書き込めるアカウント（通常は管理者アカウント）。インストール用スクリプトはそこへ直接配置します。
-- 2 GB以上の空き容量。事前確認が調べる最低限であり、すべての作業に十分な容量を保証するものではありません。
-- 配布元を確認して入手したItJustTalksのソース。ソースはZIPダウンロードではなく、`git clone https://github.com/GrShin5/ItJustTalks`で取得してください。Desktop・Documents・iCloud Drive・File Providerの配下を避け、例えば`~/Developer/ItJustTalks`に配置します。条件を満たさないと事前確認が失敗し、ビルドも停止します。
+macOS 27以上、AI機能にはApple silicon、Apple Intelligenceの有効化、モデル準備、MacとSiriの言語の一致が必要です。Command Line Tools（コマンドで開発するためのApple製ツール。Gitを含む）だけで導入できます。フルXcodeは不要です（Xcode 27も使用可）。Homebrew・OpenSSL 3の追加導入も不要です。/Applicationsへ書き込めるアカウント（通常は管理者）と2 GBの空き容量が必要です。
 
-スクリプトの表示はロケール（LC_ALL・LC_MESSAGES・LANG）に従い、未設定・C・POSIXの時は日本語です。英語で表示する時は、各コマンドの前に`ITJUSTTALKS_LANG=en`を付けます。
+Command Line Toolsがなければ `xcode-select --install` を実行し、macOSの画面で導入します。証明書ツールはOpenSSL 3があればそれを使い、なければmacOS内蔵の `/usr/bin/openssl`（LibreSSL）を使います。
 
-開発ツールの正確な対応版は未確認です。ソースの作業フォルダをターミナルで開き、以下を順番に進めます。途中でエラーになったら止め、表示内容を確認してください。
+ソースは `git clone https://github.com/GrShin5/ItJustTalks` で取得します。ZIPは使いません。Desktop・Documents・iCloud Drive・File Provider配下を避け、例えば `~/Developer/ItJustTalks` を使います。remote・ブランチ・`git status --short` を確認し、変更や競合・取得元不一致なら停止します。
+
+0.1.0はApple M1 MacBook Air（メモリ8 GB、macOS 27.2、フルXcode 27.2）で導入済みです。0.1.1はCommand Line Toolsだけで、Apple M5 Maxでのビルドと、Apple M1 MacBook Air（macOS 27.2）での新規導入を確認済みです。OpenSSL 3がないMacでの導入は未確認です。Core 3搭載Macは未確認です。
+
+表示言語は `ITJUSTTALKS_LANG=ja`／`en` が優先され、指定なしではロケールに従います。未設定・C・POSIXなら日本語です。英語表示の例：`ITJUSTTALKS_LANG=en bash scripts/install.sh`。
+
+### まとめて導入する
+
+```sh
+bash scripts/install.sh
+```
+
+`--allow-signing-cert` は証明書の作成・登録とコード署名だけの信頼設定への同意です。必要なら内容を確認して `bash scripts/install.sh --allow-signing-cert` で再実行し、自分でmacOSの認証画面（1〜2回出ることがあります）を承認します。
+
+処理順は `preflight.sh` → 既存アプリ確認 → 必要時の `make_signing_cert.sh` → `make_app.sh release` → `verify_app_identity.sh dist/ItJustTalks.app` → `preflight.sh --install` → `install_app.sh` → `verify_app_identity.sh dist/ItJustTalks.app /Applications/ItJustTalks.app` です。ツールの問題は証明書操作より先に停止します。既存アプリが同じソース（同じコミット）から作られ、署名の検証も通る場合は「既にインストール済みです」と表示して終了0、そうでなければビルドせずに終了2で[更新プロンプト](../agent-update-prompt.md)／[付録D](#appendix-d)へ案内します。既存アプリを上書き・移動しません。
+
+終了0は成功（導入済みを含む）、2は確認・ビルド・検証の失敗、3は承認または信頼待ちです。最初の問題で停止し、「あなたがやること」に次の操作を表示します。原因を直して同じコマンドを再実行すると、証明書を再利用し、ビルドをやり直して安全に再開します。成功時は配置場所、Info.plistの版、ソースコミット、検証OK、残る操作を表示します。
+
+### 個別に実行する手順
+
+エラー時は停止してください。以下は手動で進める場合の手順です。
 
 ### 1. 事前確認
 
@@ -909,19 +920,49 @@ AIに指示の履歴に残るのは、話した指示の文字起こしです。
 bash scripts/preflight.sh
 ```
 
-OS、開発用ツール、Swift、キーチェーンと署名、OpenSSL、作業場所、Git、既存インストール、空き容量などを調べます。署名証明書が未作成なら、案内を確認して次の手順で作ります。
+`preflight.sh [--quiet] [--install]` は読取り専用です。順に、macOS 27以上、選択中の開発ツール（Command Line Tools／Xcodeとパス）、Swift 6.4以上、`xcrun --sdk macosx --show-sdk-version` によるSDK 27以上、一時フォルダでの実際の型チェック、証明書状態、証明書ツール、作業場所、Git clone、既存導入、空き容量を確認します。型チェックは `import FoundationModels` と `DynamicGenerationSchema` を使い、マクロなしで `xcrun --sdk macosx swiftc -typecheck` を実行します。AIモジュールをビルドできないツールは証明書の話より先に報告します。
 
-事前確認はmacOS 27以上・Swift 6.4以上を必須とし、パッケージ（`Package.swift`）と組み立てたアプリのInfo.plistも最小OSを27に設定します。ただし、事前確認が通るだけでAI用APIのビルドや利用を保証するものではありません。
+証明書の状態（完全一致のラベル「ItJustTalks Dev」で判定）：
 
-### 2. 自己署名証明書を作る
+| 状態 | 意味 |
+| --- | --- |
+| found | 信頼済みコード署名ID |
+| untrusted | ログインキーチェーンにあるが有効なコード署名IDではない |
+| absent | 完全一致検索がnot found（終了44） |
+| duplicate | 完全一致の証明書が複数。停止し追加作成しない |
+| inaccessible | その他のキーチェーンエラー。不在と扱わない |
+
+最後は必ず次のいずれか1行です。
+
+```text
+結論: 準備完了
+結論: 署名用証明書の作成が必要
+結論: 証明書の信頼設定が必要
+結論: 停止（<short reason>）
+```
+
+英語表示では次の形式です。
+
+```text
+RESULT: ready
+RESULT: needs-signing-cert
+RESULT: needs-trust
+RESULT: blocked (<short reason>)
+```
+
+終了0は失敗なし（警告の場合あり）。needs-signing-cert／needs-trustも0です。失敗が1件でもあれば終了2で、最終行は停止／blockedです。
+
+### 2. 自己署名証明書を用意する
 
 ```sh
 bash scripts/make_signing_cert.sh
 ```
 
-ログインキーチェーンへ署名用証明書を作成・登録します。macOSの認証ダイアログでは、コード署名の信頼設定を確認して承認します。既存の有効な証明書は再利用されます。
+作成・登録とコード署名だけの信頼について承認してから実行します。foundは「already exists and is trusted」とSHA-1（証明書を識別する値）を表示して終了0。absentではCN「ItJustTalks Dev」、digitalSignature、codeSigning、有効期間10年の自己署名証明書を生成します。OpenSSL 3では `pkcs12 -legacy`、LibreSSLでは `-legacy` なしです。ログインキーチェーンへ `/usr/bin/codesign` を許可して登録します。untrustedでは新規作成せず既存証明書を一時ファイルへ書き出します。
 
-証明書は更新のたびに作り直すものではありません。同じ署名を継続して使います。キーチェーンに接続できない・信頼されていないなどの案内が出たら、その問題を確認してから進めます。
+両者の信頼操作は `security add-trusted-cert -p codeSign -k <login keychain> <cert>` だけです。コード署名に信頼を限定し、失敗しても広い信頼では再試行しません。Touch ID／パスワードの画面は自分で承認します。duplicate／inaccessibleは説明して終了1。キャンセルや時間切れ（timeout／gtimeoutがある場合180秒）は「証明書は登録済み、信頼は未完了、再実行で再開」と表示し終了3です。同じスクリプトを再実行してください。作成・信頼成功はSHA-1を表示して終了0です。
+
+`--non-interactive` は画面を出さず作成もせず、状態だけを報告し終了0。`--interactive-help` は最終手段のKeychain Access手順です。更新時に証明書を作り直さないでください。
 
 ### 3. release版を組み立てる
 
@@ -946,6 +987,7 @@ bash scripts/verify_app_identity.sh dist/ItJustTalks.app
 ```sh
 bash scripts/preflight.sh --install
 bash scripts/install_app.sh
+bash scripts/verify_app_identity.sh dist/ItJustTalks.app /Applications/ItJustTalks.app
 ```
 
 インストール前の確認後、`dist/ItJustTalks.app`をApplicationsフォルダへ配置します。インストールスクリプトはそれ自身でpreflightを呼びません。配置前後にアプリを検証し、既存アプリ・同名ファイル・リンクを上書きしません。
@@ -954,12 +996,30 @@ bash scripts/install_app.sh
 
 最後にFinderから`ItJustTalks.app`を起動し、初回セットアップを行います。ビルドや署名の検証は、マイク・キー・他アプリへの入力などの実機確認の代わりにはなりません。
 
+### 困った時
+
+| 画面やログに出る表示 | 意味と次にやること |
+| --- | --- |
+| `FoundationModelsMacros` や `SwiftUIMacros` の plugin が見つからない（`plugin ... not found`） | 0.1.0のソースはフル版Xcodeが必要でした。0.1.1はCommand Line Toolsだけで組み立てられます。ソースが0.1.1以降か確認してください。 |
+| `結論: 停止（開発環境）` | 開発ツールが足りないか古い状態です。表示された「あなたがやること」に従います。多くの場合は `xcode-select --install`、またはソフトウェアアップデートでCommand Line Toolsを更新します。証明書の作業はまだ始まっていません。 |
+| `結論: 署名用証明書の作成が必要` | 署名用証明書がまだありません。内容を確認して同意したら `bash scripts/install.sh --allow-signing-cert` を実行し、macOSの認証画面（1〜2回出ることがあります）を自分で承認します。 |
+| `結論: 証明書の信頼設定が必要` | 証明書はありますが、署名に使える状態（信頼設定）になっていません。新しく作らず、同じコマンドで信頼設定だけを行います。 |
+| 「信頼設定が完了していません」と出て止まった | 認証画面を閉じたか、時間切れになりました。同じコマンドをもう一度実行し、認証画面で承認すると続きから進みます。 |
+| 「ItJustTalks Dev という証明書が複数あります」 | どれを使うか自動では決められないため、新しく作らずに止まります。キーチェーンアクセスで「ItJustTalks Dev」を検索し、どれを残すか確認してください。分からない場合は自動で削除せず、相談してください。 |
+| 「キーチェーンにアクセスできません」 | ログインキーチェーンがロックされているなどの状態です。証明書が無いとは扱いません。ロックを解除して再実行します。証明書の削除や作り直しは不要です。 |
+| AIエージェントの実行中に `swift-plugin-server ... malformed response` や `CSSMERR_TP_NOT_TRUSTED` が出る | エージェントの制限付き実行環境（サンドボックス）が原因のことがあります。Macの故障とは限りません。最初に承認した範囲で、制限の外で同じ手順をやり直します。検証を省略・無効にして進めてはいけません。 |
+| AIエージェントの確認で、`codesign -dvv` の表示の署名者欄が `Authority=(unavailable)` と出る | 制限付き実行環境では署名者名を読めないことがあり、署名者が違うとは限りません。最初に承認した範囲で、配置前は `bash scripts/verify_app_identity.sh dist/ItJustTalks.app`、配置後は `bash scripts/verify_app_identity.sh dist/ItJustTalks.app /Applications/ItJustTalks.app` を実行し、その結果で判断します。不合格なら止まって相談します（検証は省きません）。 |
+| 「既にあります。新規導入では上書きしません」 | すでに別の版が入っています。[付録D](#appendix-d)または更新用プロンプトで更新します。 |
+| `=== 完了 ===` が出た | インストールと署名の検証が済んだ状態です。Finderから起動し、マイク・音声認識・アクセシビリティを許可します。Apple Intelligenceがオンで、MacとSiriの言語が一致しているかを確認し、「今日はテストです」などの短い文で試します。インストールの成功は、実際の動作確認の合格ではありません。 |
+
+AIエージェントには、コマンドの動作範囲を制限する仕組み（サンドボックス）を持つものがあります。その中では、署名の信頼の確認、キーチェーン、`~/Developer` や `/Applications` への書き込みが失敗することがあります。導入の最初に、導入用スクリプトに限って制限の外で実行することを承認しておくと、途中で止まりにくくなります。
+
 <a id="appendix-c"></a>
 ## 付録C：この説明書が対象とするバージョンと配布形態
 
 | 項目 | 対象 |
 | --- | --- |
-| アプリ版 | 0.1.0。組立スクリプトの`CFBundleShortVersionString`の値です |
+| 対象アプリバージョン | 0.1.1 |
 | 製品名 | ItJustTalks |
 | 最小環境 | macOS 27。AIの対応機種・準備状態は別途確認します |
 | 導入方式 | ソースからビルドし、自己署名してインストール |
@@ -971,6 +1031,8 @@ bash scripts/install_app.sh
 <a id="appendix-d"></a>
 ## 付録D：更新する
 
+現在の更新例は0.1.0から0.1.1です。
+
 ### AIエージェントに更新を任せる
 
 1. [更新プロンプト](../agent-update-prompt.md)を開き、コードブロック全体をエージェントに渡します。取得元は`https://github.com/GrShin5/ItJustTalks`です。
@@ -979,7 +1041,7 @@ bash scripts/install_app.sh
 4. 提示された退避先・配置先・復旧方法を確認し、旧アプリを退避する直前に了承します。旧版は削除せず保持します。
 5. 空になった配置先へインストールし、配置後の検証を確認します。新版を起動し、設定・履歴・辞書とマイク・キー・短い合成文の入力を確認します。
 
-`install_app.sh`は既存アプリを上書きしません。更新プロンプトは旧版の退避と署名検証を組み合わせ、失敗時は停止して復旧方法を案内します。証明書を勝手に作り直したり、権限を一括初期化したりする手順ではありません。新規証明書が必要なら別途事前承認を求めますが、署名が継続しなければ更新しません。
+`install_app.sh`は既存アプリを上書きしません。更新プロンプトは旧版の退避と署名検証を組み合わせ、失敗時は停止して復旧方法を案内します。証明書を勝手に作り直したり、権限を一括初期化したりする手順ではありません。新規証明書が必要な場合も最初の一括承認に含めますが、署名が継続しなければ更新しません。
 
 利用者データのアップロードやセキュリティ設定の変更は禁止です。Koedexのアプリ・データにも触れません。退避した旧版は、新版の動作確認が終わるまで残してください。
 

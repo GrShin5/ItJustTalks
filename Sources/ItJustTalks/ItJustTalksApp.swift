@@ -375,9 +375,9 @@ struct MenuBarContentView: View {
     @ObservedObject var settingsStore: SettingsStore
     @ObservedObject var permissionManager: PermissionManager
     @Environment(\.openWindow) private var openWindow
-    @State private var microphones: [MicrophoneDevice] = []
-    @State private var defaultMicrophoneName = ""
-    @State private var languageProfileMessage: String?
+    @ViewState private var microphones: [MicrophoneDevice] = []
+    @ViewState private var defaultMicrophoneName = ""
+    @ViewState private var languageProfileMessage: String?
 
     private var uiLanguage: AppLanguage {
         settingsStore.settings.languagePreferences.uiLanguage

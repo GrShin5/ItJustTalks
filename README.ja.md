@@ -2,7 +2,7 @@
 
 [English](README.md) · [日本語マニュアル](docs/manual/ja.md) · [English manual](docs/manual/en.md)
 
-ItJustTalks 0.1.0 は、macOS 27用の完全無料・完全ローカルの音声入力＆文章アシスタントです。声を文字にして整え、選択した文章やコピーした文章の校正・翻訳・要約、文章作成を手伝います。同じ開発者のKoedexから派生したApache-2.0のアプリで、AIにはApple Foundation Modelsのオンデバイスモデルだけを使います。外部AIの契約やAPIキーは不要です。
+ItJustTalks 0.1.1 は、macOS 27用の完全無料・完全ローカルの音声入力＆文章アシスタントです。声を文字にして整え、選択した文章やコピーした文章の校正・翻訳・要約、文章作成を手伝います。同じ開発者のKoedexから派生したApache-2.0のアプリで、AIにはApple Foundation Modelsのオンデバイスモデルだけを使います。外部AIの契約やAPIキーは不要です。
 
 <p align="center">
   <img src="docs/manual/images/ja/onboarding-02-welcome.png" width="420" alt="初回セットアップのようこそ画面">
@@ -50,22 +50,19 @@ ItJustTalks 0.1.0 は、macOS 27用の完全無料・完全ローカルの音声
 
 ## インストール・更新
 
-配布方式はソースビルド＋このMacの自己署名証明書です。Git、macOS 27対応の開発ツール（Swift 6.4以上とmacOS 27のSDK）、証明書作成用のOpenSSL 3（例：Homebrewで`brew install openssl@3`）、アプリケーションフォルダへ書き込めるアカウント（通常は管理者アカウント）が必要です。事前確認のSwift 6.4以上判定だけでSDK互換性は保証しません。
+配布方式はソースビルドと、このMacでの自己署名です。Apple Developer ProgramのDeveloper ID署名・公証は使いません。
 
-ソースはZIPダウンロードではなく、`git clone https://github.com/GrShin5/ItJustTalks`で取得してください。Desktop・Documents・iCloud Drive・File Providerの配下を避け、例えば`~/Developer/ItJustTalks`に配置します。条件を満たさないと事前確認が失敗し、ビルドも停止します。
+macOS 27以上、AI機能にはApple silicon、Apple Intelligenceの有効化、モデル準備、MacとSiriの言語の一致が必要です。Command Line Tools（コマンドで開発するためのApple製ツール。Gitを含む）だけで導入できます。フルXcodeは不要です（Xcode 27も使用可）。Homebrew・OpenSSL 3の追加導入も不要です。/Applicationsへ書き込めるアカウント（通常は管理者）と2 GBの空き容量が必要です。
 
-[付録Bの準備と注意事項](docs/manual/ja.md#appendix-b)を読んだうえで、ソースの作業フォルダで順番に実行します。証明書の作成・キーチェーン登録と認証は内容を確認してください。
+ソースはZIPではなく `git clone https://github.com/GrShin5/ItJustTalks` で取得します。Desktop・Documents・iCloud Drive・File Provider配下を避け、例えば `~/Developer/ItJustTalks` を使います。
+
+[付録B](docs/manual/ja.md#appendix-b)を読み、ソースフォルダで実行します。個別スクリプトの手順も付録Bにあります。
 
 ```sh
-bash scripts/preflight.sh
-bash scripts/make_signing_cert.sh
-bash scripts/make_app.sh release
-bash scripts/verify_app_identity.sh dist/ItJustTalks.app
-bash scripts/preflight.sh --install
-bash scripts/install_app.sh
+bash scripts/install.sh
 ```
 
-スクリプトの表示はロケールに従い、未設定・C・POSIXの時は日本語です。英語にする時は`ITJUSTTALKS_LANG=en`を付けます（例：`ITJUSTTALKS_LANG=en bash scripts/preflight.sh`）。
+証明書が必要なら終了3で停止します。`--allow-signing-cert` は証明書の作成・登録とコード署名だけの信頼設定への同意です。内容を確認したら `bash scripts/install.sh --allow-signing-cert` を実行し、macOSの認証画面を自分で承認します。表示言語は `ITJUSTTALKS_LANG=ja`／`en`、指定なしではロケールに従い、未設定・C・POSIXなら日本語です。
 
 エラー時は停止してください。既存の有効な署名は再利用し、検証を省略しません。インストール用スクリプトは既存アプリを上書きしません。導入は[導入プロンプト](docs/agent-install-prompt.md)と[付録A](docs/manual/ja.md#appendix-a)、更新は[更新プロンプト](docs/agent-update-prompt.md)と[付録D](docs/manual/ja.md#appendix-d)でも案内しています。エージェントを使わない更新は[付録D](docs/manual/ja.md#appendix-d)を参照してください。AIエージェントはアプリの通常利用には不要です。
 

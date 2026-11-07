@@ -92,7 +92,7 @@ If you do not want history saved, choose “Do not save” for each mode in the 
 | Display languages | Japanese and English, selectable separately from the speech-recognition language |
 | AI output languages | Automatic, Japanese, and English. An output language explicitly requested by voice takes priority over the setting |
 | Other AI languages | A complete list of supported languages and their quality cannot be guaranteed. This is separate from speech-recognition support |
-| Verification | Verified on Apple M5 Max (64GB memory). M1 (8GB) is planned. |
+| Verification | 0.1.0 was installed on an Apple M1 MacBook Air (8 GB memory, macOS 27.2, full Xcode 27.2). 0.1.1 was verified with Command Line Tools only: built on an Apple M5 Max and newly installed on an Apple M1 MacBook Air (macOS 27.2). Installation on a Mac without OpenSSL 3 is not yet verified. Macs with Core 3 remain unverified. |
 | Core 3 Macs | Unverified. Operation is not claimed |
 
 Voice input and transcription may work even if AI is unsupported. Speech recognition must have its own support and permissions.
@@ -161,25 +161,21 @@ AI may shorten the original wording. Long translations and summaries may still b
 <a id="chapter-4"></a>
 ## 4. Getting and installing the app
 
-This manual covers building the app from source, signing it with a self-signed certificate on this Mac, and installing it. In the working folder containing source obtained from the distributor, run these commands in order. [Appendix B](#appendix-b) explains preparation and steps in detail.
+Build from source and self-sign on this Mac. Self-signing means signing the app with a certificate created on this Mac. Developer ID signing and notarization (Apple checks for distribution) are not used.
 
-Get the source with `git clone https://github.com/GrShin5/ItJustTalks`, not a ZIP download. Keep it outside Desktop, Documents, iCloud Drive, and File Provider storage, for example at `~/Developer/ItJustTalks`. Otherwise preflight fails and the build stops.
+Requires macOS 27 or later. AI features require Apple silicon, Apple Intelligence turned on, a ready model, and matching Mac and Siri languages. Command Line Tools (Apple tools for building from commands, including Git) are sufficient. Full Xcode is not required (Xcode 27 also works). No Homebrew or OpenSSL 3 installation is needed. You need an account that can write to /Applications (normally an administrator) and 2 GB free space.
+
+Get the source with `git clone https://github.com/GrShin5/ItJustTalks`, not ZIP. Keep it outside Desktop, Documents, iCloud Drive and File Provider storage, for example at `~/Developer/ItJustTalks`.
+
+Read [Appendix B](#appendix-b), then run in the source folder.
 
 ```sh
-bash scripts/make_signing_cert.sh
-bash scripts/make_app.sh release
-bash scripts/install_app.sh
+bash scripts/install.sh
 ```
 
-1. `make_signing_cert.sh` creates and registers a signing certificate in the login keychain. Review and approve the authentication dialog for trust settings. An existing valid certificate is reused.
-2. `make_app.sh release` runs preflight checks, builds, bundles resources, signs, and verifies the app, producing `dist/ItJustTalks.app`. Without an argument it uses debug, so include `release`.
-3. `install_app.sh` places the verified app in the Applications folder. It does not overwrite an existing app or another item with the same name. These steps cannot simply be repeated over an existing installation to update it.
+If certificate creation, registration or code-signing-only trust is needed, it stops with exit 3. If you agree, run `bash scripts/install.sh --allow-signing-cert`. Approve the macOS authentication dialogs yourself (one or two may appear). It checks tools first, then builds, verifies signatures and installs. It never overwrites or moves an existing app. For updates use [Appendix D](#appendix-d).
 
-For checks alone, use `bash scripts/preflight.sh`. Before installation, you can also use `bash scripts/preflight.sh --install`. The installer itself does not call preflight.
-
-Certificate creation needs OpenSSL 3, and building needs development tools. Preflight checks for Swift 6.4 or later and other requirements, but passing does not guarantee that macOS 27 AI features can be built. The exact compatible Xcode and Command Line Tools versions have not been verified. Time from first setup to a finished build is not guaranteed either.
-
-Keep the same signature across updates. If a signature mismatch stops the process, read the guidance and keep verification enabled.
+Launch from Finder and complete [first-time setup](#chapter-5). A successful installation is not a passed device test.
 
 <a id="chapter-5"></a>
 ## 5. First-time setup
@@ -878,30 +874,45 @@ Only if you will no longer update or rebuild with this signature, open Keychain 
 <a id="appendix-a"></a>
 ## Appendix A: Installation with an AI agent
 
-If you are unfamiliar with Terminal, you can ask an AI agent that can work with local Mac folders and run commands to install the app. An AI agent is not needed for normal app use.
+If you are unfamiliar with Terminal, give the entire code block in the [install prompt](../agent-install-prompt.en.md) to an AI agent that can use Mac folders and commands. An agent is not needed for normal app use.
 
-1. Open the [installation prompt](../agent-install-prompt.en.md). The source is `https://github.com/GrShin5/ItJustTalks`.
-2. Choose a local working folder outside sync in the agent and paste the entire code block.
-3. Read the preflight results. If a new certificate is needed, review the explanation of Keychain registration and signing trust settings before approving. Handle macOS authentication and permissions yourself.
-4. Review build, signing, and placement verification results, then launch from Finder and follow [first-time setup in Chapter 5](#chapter-5).
+1. The agent checks the OS, tools, location and existing app read-only.
+2. Approve in one message: cloning and writing in the working folder; certificate creation, registration and code-signing-only trust; placement in /Applications; and, if needed, execution outside the sandbox limited to the installation scripts. Decline to stop.
+3. You handle these screens: Command Line Tools installation only if missing; Keychain authentication (Touch ID / password; it can appear once or twice during installation, and you approve each); and after installation, Finder launch and Microphone / Speech Recognition / Accessibility permissions. Manual certificate creation is normally unnecessary.
+4. Review the result, check Apple Intelligence, model readiness and matching Mac / Siri languages, then try a short synthetic sentence. Installation success is not a passed device test.
 
-The prompt prohibits uploading data, changing security settings, and accessing Koedex data. You do not need to paste real speech, mail, dictionary entries, or history. Network activity by external installation tools is separate from ItJustTalks's on-device AI processing. For manual steps, see [Appendix B](#appendix-b).
+Do not attach or upload speech, mail, dictionary entries or history. The prompt prohibits weakening protections and touching Koedex. The agent’s own network use is separate from the app’s on-device AI processing.
 
 <a id="appendix-b"></a>
 ## Appendix B: Building from source yourself
 
 ### What you need
 
-- A Mac running macOS 27. See [Chapter 3](#chapter-3) for AI requirements.
-- Xcode supporting macOS 27, or Command Line Tools.
-- Git and OpenSSL 3 for certificate creation. If OpenSSL 3 is missing, preflight suggests `brew install openssl@3` (requires Homebrew).
-- An account that can write to the Applications folder (normally an administrator account). The installer places the app there directly.
-- At least 2 GB free space. This is the minimum checked by preflight, not a guarantee of enough space for every task.
-- ItJustTalks source obtained from a verified distributor. Get the source with `git clone https://github.com/GrShin5/ItJustTalks`, not a ZIP download. Keep it outside Desktop, Documents, iCloud Drive, and File Provider storage, for example at `~/Developer/ItJustTalks`. Otherwise preflight fails and the build stops.
+Requires macOS 27 or later. AI features require Apple silicon, Apple Intelligence turned on, a ready model, and matching Mac and Siri languages. Command Line Tools (Apple tools for building from commands, including Git) are sufficient. Full Xcode is not required (Xcode 27 also works). No Homebrew or OpenSSL 3 installation is needed. You need an account that can write to /Applications (normally an administrator) and 2 GB free space.
 
-Script messages follow the locale (LC_ALL, LC_MESSAGES, or LANG) and are in Japanese when it is unset, C, or POSIX. To get English output, prefix each command with `ITJUSTTALKS_LANG=en`, for example `ITJUSTTALKS_LANG=en bash scripts/preflight.sh`.
+If Command Line Tools are missing, run `xcode-select --install` and use the macOS dialog. Certificate creation uses OpenSSL 3 if present, otherwise macOS’s built-in `/usr/bin/openssl` (LibreSSL).
 
-Exact compatible development-tool versions have not been verified. Open the source working folder in Terminal and follow these steps in order. If an error occurs, stop and read the message.
+Get the source with `git clone https://github.com/GrShin5/ItJustTalks`, not ZIP. Use a folder outside Desktop, Documents, iCloud Drive and File Provider storage, such as `~/Developer/ItJustTalks`. Check the remote, branch and `git status --short`; stop on modifications, conflicts or a different source.
+
+0.1.0 was installed on an Apple M1 MacBook Air (8 GB memory, macOS 27.2, full Xcode 27.2). 0.1.1 was verified with Command Line Tools only: built on an Apple M5 Max and newly installed on an Apple M1 MacBook Air (macOS 27.2). Installation on a Mac without OpenSSL 3 is not yet verified. Macs with Core 3 remain unverified.
+
+Output follows `ITJUSTTALKS_LANG=ja` / `en` first, otherwise the locale. Unset, C or POSIX means Japanese. For English use `ITJUSTTALKS_LANG=en bash scripts/install.sh`.
+
+### One-command installation
+
+```sh
+bash scripts/install.sh
+```
+
+`--allow-signing-cert` means you agree to certificate creation, registration and code-signing-only trust. If needed, review this and rerun `bash scripts/install.sh --allow-signing-cert`. Approve the macOS authentication dialogs yourself (one or two may appear).
+
+Order: `preflight.sh` → existing-app check → `make_signing_cert.sh` if needed → `make_app.sh release` → `verify_app_identity.sh dist/ItJustTalks.app` → `preflight.sh --install` → `install_app.sh` → `verify_app_identity.sh dist/ItJustTalks.app /Applications/ItJustTalks.app`. Toolchain problems stop before certificate work. If the existing app was built from the same source (same commit) and passes signature verification, it reports that it is already installed and exits 0. Otherwise it exits 2 without building and points to the [update prompt](../agent-update-prompt.en.md) / [Appendix D](#appendix-d). It never overwrites or moves an existing app.
+
+Exit 0 means success (including already installed); 2 means a failed check, build or verification; 3 means waiting for approval or trust. It stops at the first problem with a "What you need to do" message. Fix the cause and rerun the same command to resume safely: the certificate is reused and the build is redone. Success reports the path, version from Info.plist, source commit, verification OK and remaining user actions.
+
+### Individual manual steps
+
+Stop on errors. Use these steps if proceeding manually.
 
 ### 1. Run preflight
 
@@ -909,19 +920,49 @@ Exact compatible development-tool versions have not been verified. Open the sour
 bash scripts/preflight.sh
 ```
 
-This checks the OS, development tools, Swift, Keychain and signing, OpenSSL, working location, Git, existing installations, free space, and other conditions. If no signing certificate exists, read the guidance and create one in the next step.
+`preflight.sh [--quiet] [--install]` is read-only. In order it checks macOS ≥ 27; the selected developer directory (Command Line Tools or Xcode and its path); Swift ≥ 6.4; SDK ≥ 27 using `xcrun --sdk macosx --show-sdk-version`; an actual temporary compile probe; certificate state; certificate tool; work location; Git clone; existing install; disk space. The probe uses `import FoundationModels` and `DynamicGenerationSchema`, without macros, with `xcrun --sdk macosx swiftc -typecheck`. A toolchain unable to build the AI module is reported before any certificate issue.
 
-Preflight requires macOS 27 or later and Swift 6.4 or later. The package (`Package.swift`) and the assembled app's Info.plist also set the minimum OS to 27. Passing preflight alone does not guarantee that AI APIs can be built or used.
+Certificate states (exact label "ItJustTalks Dev"):
 
-### 2. Create a self-signed certificate
+| State | Meaning |
+| --- | --- |
+| found | Trusted code-signing identity |
+| untrusted | In the login keychain but not a valid code-signing identity |
+| absent | Exact-name search reports not found (status 44) |
+| duplicate | Multiple exact-label certificates; stop, never create another |
+| inaccessible | Any other Keychain error; never treated as absent |
+
+Exactly one of these lines always ends the output.
+
+```text
+結論: 準備完了
+結論: 署名用証明書の作成が必要
+結論: 証明書の信頼設定が必要
+結論: 停止（<short reason>）
+```
+
+With English output:
+
+```text
+RESULT: ready
+RESULT: needs-signing-cert
+RESULT: needs-trust
+RESULT: blocked (<short reason>)
+```
+
+Exit 0 means no failures (warnings possible). needs-signing-cert and needs-trust also exit 0. Any failure gives exit 2 and a blocked final line.
+
+### 2. Prepare a self-signed certificate
 
 ```sh
 bash scripts/make_signing_cert.sh
 ```
 
-Creates and registers a signing certificate in the login keychain. In the macOS authentication dialog, review the code-signing trust setting before approving. An existing valid certificate is reused.
+Run only after approval for creation, registration and code-signing-only trust. found prints "already exists and is trusted" plus SHA-1 (a certificate identifier), exit 0. absent creates a self-signed certificate with CN "ItJustTalks Dev", digitalSignature, codeSigning and a 10-year lifetime. OpenSSL 3 uses `pkcs12 -legacy`; LibreSSL omits `-legacy`. It imports into the login keychain allowing `/usr/bin/codesign`. untrusted exports the existing certificate to a temporary file without creating another.
 
-Do not recreate the certificate for each update. Keep using the same signature. If Keychain access or trust fails, resolve the reported problem before continuing.
+Both use only `security add-trusted-cert -p codeSign -k <login keychain> <cert>` for trust. Trust is limited to code signing; failure never retries with broader trust. Handle Touch ID / password yourself. duplicate / inaccessible stops with an explanation, exit 1. Cancellation or timeout (180 seconds if timeout / gtimeout exists) reports "the certificate is registered; trust is not yet complete; rerun this script to resume", exit 3. Rerun the same script. Successful creation or trust reports SHA-1 and exits 0.
+
+`--non-interactive` never shows dialogs or creates anything; it reports state and exits 0. `--interactive-help` gives last-resort Keychain Access instructions. Do not recreate certificates for updates.
 
 ### 3. Assemble the release app
 
@@ -946,6 +987,7 @@ Checks the app identifier, signature, certificate, signing requirement, icon, an
 ```sh
 bash scripts/preflight.sh --install
 bash scripts/install_app.sh
+bash scripts/verify_app_identity.sh dist/ItJustTalks.app /Applications/ItJustTalks.app
 ```
 
 After the pre-install check, the app is placed from `dist/ItJustTalks.app` into the Applications folder. The installer does not call preflight itself. It verifies the app before and after placement and does not overwrite an existing app, same-named file, or link.
@@ -954,12 +996,30 @@ If it stops because the app is already installed, follow [Appendix D](#appendix-
 
 Finally, launch `ItJustTalks.app` from Finder and complete first-time setup. Build and signature checks do not replace device checks of the microphone, keys, or insertion into other apps.
 
+### Troubleshooting
+
+| Message on screen or in the log | What it means and what to do |
+| --- | --- |
+| A `FoundationModelsMacros` or `SwiftUIMacros` plugin was not found (`plugin ... not found`) | The 0.1.0 source needed full Xcode. 0.1.1 builds with Command Line Tools only. Check that the source is 0.1.1 or later. |
+| `RESULT: blocked (toolchain)` | The developer tools are missing or too old. Follow "What you need to do". Usually this means `xcode-select --install`, or updating Command Line Tools in Software Update. No certificate work has started yet. |
+| `RESULT: needs-signing-cert` | There is no signing certificate yet. After reviewing and agreeing, run `bash scripts/install.sh --allow-signing-cert` and approve the macOS authentication dialogs yourself (one or two may appear). |
+| `RESULT: needs-trust` | The certificate exists but is not yet trusted for signing. Nothing new is created; the same command sets only the trust. |
+| It stopped with "trust is not complete" | The authentication dialog was closed or timed out. Run the same command again and approve the dialog; it continues from where it stopped. |
+| "There is more than one certificate named ItJustTalks Dev" | The script cannot choose one automatically, so it stops without creating another. Search for "ItJustTalks Dev" in Keychain Access and decide which one to keep. If unsure, do not delete anything; ask for help. |
+| "The keychain is inaccessible" | For example, the login keychain is locked. This is not treated as a missing certificate. Unlock it and rerun. Do not delete or recreate the certificate. |
+| `swift-plugin-server ... malformed response` or `CSSMERR_TP_NOT_TRUSTED` while an AI agent runs the steps | The agent's restricted execution area (sandbox) can cause this; the Mac is not necessarily broken. Redo the same steps outside the sandbox within the scope approved at the start. Never skip or disable verification. |
+| During an AI agent's check, the signer field in `codesign -dvv` output shows `Authority=(unavailable)` | A restricted execution area may be unable to read the signer name; this alone does not mean a different signer. Within the scope approved at the start, run `bash scripts/verify_app_identity.sh dist/ItJustTalks.app` before installation, or `bash scripts/verify_app_identity.sh dist/ItJustTalks.app /Applications/ItJustTalks.app` after it, and judge by the result. If it fails, stop and ask for help (never skip verification). |
+| "already exists. A new installation never overwrites it" | Another version is installed. Update it with [Appendix D](#appendix-d) or the update prompt. |
+| `=== Done ===` is shown | Installation and signature verification are complete. Launch from Finder and allow Microphone, Speech Recognition, and Accessibility. Check that Apple Intelligence is on and the Mac and Siri languages match, then try a short sentence such as "This is a test". A successful installation is not a passed device test. |
+
+Some AI agents run commands in a restricted area (a sandbox). There, signature trust checks, the keychain, and writing to `~/Developer` or `/Applications` can fail. Approving, at the start, that the installation scripts may run outside the sandbox keeps the installation from stopping halfway.
+
 <a id="appendix-c"></a>
 ## Appendix C: Version and distribution covered by this manual
 
 | Item | Covered version or form |
 | --- | --- |
-| App version | 0.1.0; the assembly script's `CFBundleShortVersionString` value |
+| App version covered | 0.1.1 |
 | Product name | ItJustTalks |
 | Minimum environment | macOS 27. Check AI hardware support and readiness separately |
 | Installation method | Build from source, self-sign, and install |
@@ -971,6 +1031,8 @@ This manual is based on the current source. It does not guarantee that future di
 <a id="appendix-d"></a>
 ## Appendix D: Updating
 
+The current update example is 0.1.0 to 0.1.1.
+
 ### Updating with an AI agent
 
 1. Open the [update prompt](../agent-update-prompt.en.md) and give the entire code block to the agent. The source is `https://github.com/GrShin5/ItJustTalks`.
@@ -979,7 +1041,7 @@ This manual is based on the current source. It does not guarantee that future di
 4. Review the proposed backup location, installation location, and recovery steps. Approve immediately before the old app is moved aside. Keep the old version instead of deleting it.
 5. Install into the now-empty location and review post-install verification. Open the new version and check settings, history, dictionary, microphone, keys, and insertion of a short synthetic sentence.
 
-`install_app.sh` does not overwrite an existing app. The update prompt combines moving the old app aside with signature checks, stops on failure, and explains recovery. It does not recreate certificates or reset all permissions on its own. A new certificate requires separate prior approval, but the update must not proceed without signature continuity.
+`install_app.sh` does not overwrite an existing app. The update prompt combines moving the old app aside with signature checks, stops on failure, and explains recovery. It does not recreate certificates or reset all permissions on its own. Include any new certificate in the initial combined approval; the update must not proceed without signature continuity.
 
 Uploading user data and changing security settings are prohibited. Koedex's app and data are also left untouched. Keep the old app until the new version has passed your checks.
 

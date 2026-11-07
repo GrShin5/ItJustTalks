@@ -24,8 +24,8 @@ struct OnboardingDebugLauncherView: View {
     @ObservedObject var settingsStore: SettingsStore
     @ObservedObject var presentation: OnboardingDebugPresentationState
     @StateObject private var permissionResetController = DebugPermissionResetController()
-    @State private var showsPermissionResetConfirmation = false
-    @State private var showsFreshSetupResetConfirmation = false
+    @ViewState private var showsPermissionResetConfirmation = false
+    @ViewState private var showsFreshSetupResetConfirmation = false
 
     private var uiLanguage: AppLanguage {
         settingsStore.settings.languagePreferences.uiLanguage

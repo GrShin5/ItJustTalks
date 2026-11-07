@@ -152,18 +152,18 @@ struct UserDictionaryWindow: View {
     let language: AppLanguage
     @Environment(\.settingsUIScaleMetrics) private var uiMetrics
 
-    @State private var searchText = ""
-    @State private var showDisabledEntries = true
-    @State private var editingID: UUID?
-    @State private var preferredForm = ""
-    @State private var spokenForms = ""
-    @State private var notes = ""
-    @State private var enabled = true
-    @State private var dictionaryViewMode: DictionaryViewMode = .normal
-    @State private var selectedDictionaryIDs: Set<UUID> = []
-    @State private var dictionaryDeletionRequest: DictionaryDeletionRequest?
-    @State private var showOptionalFields = false
-    @State private var importPreview: UserDictionaryImportPreview?
+    @ViewState private var searchText = ""
+    @ViewState private var showDisabledEntries = true
+    @ViewState private var editingID: UUID?
+    @ViewState private var preferredForm = ""
+    @ViewState private var spokenForms = ""
+    @ViewState private var notes = ""
+    @ViewState private var enabled = true
+    @ViewState private var dictionaryViewMode: DictionaryViewMode = .normal
+    @ViewState private var selectedDictionaryIDs: Set<UUID> = []
+    @ViewState private var dictionaryDeletionRequest: DictionaryDeletionRequest?
+    @ViewState private var showOptionalFields = false
+    @ViewState private var importPreview: UserDictionaryImportPreview?
     @StateObject private var csvBannerState = DictionaryCSVBannerState()
 
     private func uiText(_ japanese: String) -> String {

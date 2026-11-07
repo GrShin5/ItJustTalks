@@ -22,6 +22,7 @@ public enum AIFailureMapper {
         if let error = error as? SystemLanguageModel.Error { return map(error) }
         if let error = error as? LanguageModelSession.Error { return map(error) }
         if error is GeneratedContent.ParsingError { return .structuredParsingFailed }
+        if error is StructuredOutputDecodingError { return .structuredParsingFailed }
         if let legacy = (LegacyGenerationErrorMapper.self as any LegacyErrorMapping.Type).map(error) {
             return legacy
         }

@@ -156,8 +156,8 @@ private struct AICommandResultView: View {
     let metrics: PopupUIScaleMetrics
     let language: AppLanguage
     let onClose: () -> Void
-    @State private var showsFullSelection = false
-    @State private var didRunAction = false
+    @ViewState private var showsFullSelection = false
+    @ViewState private var didRunAction = false
 
     private var selectionPreview: String? {
         guard let selected = payload.selectedText else { return nil }

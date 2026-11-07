@@ -19,7 +19,7 @@ struct UserDictionaryImportSheet: View {
     let metrics: SettingsUIScaleMetrics
     let onConfirm: (UserDictionaryImportDraft) -> String?
     let onCancel: () -> Void
-    @State private var confirmation: DictionaryImportConfirmationState
+    @ViewState private var confirmation: DictionaryImportConfirmationState
 
     init(
         preview: UserDictionaryImportPreview,

@@ -318,9 +318,9 @@ cat > "$CONTENTS_DIR/Info.plist" << PLIST
     <key>CFBundleIdentifier</key>
     <string>$BUNDLE_IDENTIFIER</string>
     <key>CFBundleVersion</key>
-    <string>0.1.0</string>
+    <string>0.1.1</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
+    <string>0.1.1</string>
     <key>ItJustTalksBuildGitSHA</key>
     <string>$BUILD_GIT_SHA</string>
     <key>CFBundlePackageType</key>
@@ -348,6 +348,7 @@ PLIST
 # codesignが "resource fork, Finder information, or similar detritus not allowed" で失敗するため。
 xattr -cr "$APP_DIR"
 
+echo "$(t "=== 署名しています（macOSが署名用の鍵の使用許可やパスワードを求めたら、内容を確認して承認してください） ===" "=== Signing (if macOS asks to allow use of the signing key or for your password, review and approve it) ===")"
 if ! codesign --force --sign "$SIGN_IDENTITY" "$APP_DIR"; then
   echo "$(t "=== 失敗: コード署名に失敗しました ===" "=== Failed: Code signing failed ===")" >&2
   echo "$(t "証明書やkeychainの状態を確認し、必要であれば bash scripts/make_signing_cert.sh を再実行してください。" "Check the certificate and Keychain, and rerun bash scripts/make_signing_cert.sh if needed.")" >&2

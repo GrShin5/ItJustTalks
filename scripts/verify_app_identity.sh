@@ -98,6 +98,9 @@ verify_app() {
   codesign_log="$(mktemp "${TMPDIR:-/tmp}/itjusttalks-codesign.XXXXXX")" || fail "$(t "署名検証ログを作成できません。" "Cannot create the signature verification log.")"
   if ! codesign --verify --deep --strict --verbose=2 "$app_path" >/dev/null 2>"$codesign_log"; then
     codesign_error="$(<"$codesign_log")"
+    if [[ "$(itjusttalks_codesign_failure_class "$codesign_error")" == trust-unavailable ]]; then
+      echo "$(t '（説明）証明書がまだ信頼されていないか、AIエージェントの制限付き実行環境では署名の信頼を確認できない場合があります。証明書の状態を bash scripts/preflight.sh で確認し、エージェントの場合は署名時と同じ承認済みの実行範囲で再検証してください。検証を省略・緩和してはいけません。通るまでインストールしないでください。' '(Note) Either the certificate is not trusted yet, or a restricted AI-agent sandbox cannot evaluate signature trust. Check the certificate with bash scripts/preflight.sh; an agent should rerun the verification with the same approved execution scope used for signing. Never skip or relax verification, and do not install until it passes.')" >&2
+    fi
     rm -f "$codesign_log"
     fail "$(t "コード署名の検証に失敗しました ($(itjusttalks_codesign_failure_class "$codesign_error")): $app_path${codesign_error:+$'\n'codesign: $codesign_error}" "Code signature verification failed ($(itjusttalks_codesign_failure_class "$codesign_error")): $app_path${codesign_error:+$'\n'codesign: $codesign_error}")"
   fi

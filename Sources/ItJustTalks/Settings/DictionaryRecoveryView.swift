@@ -6,9 +6,9 @@ struct DictionaryRecoveryView: View {
     let language: AppLanguage
     let metrics: SettingsUIScaleMetrics
 
-    @State private var isExpanded = true
-    @State private var confirmsEmptyRestart = false
-    @State private var operationMessage: String?
+    @ViewState private var isExpanded = true
+    @ViewState private var confirmsEmptyRestart = false
+    @ViewState private var operationMessage: String?
 
     private func text(_ japanese: String) -> String { AppLocalizer.text(japanese, language: language) }
     private func format(_ japanese: String, _ values: CVarArg...) -> String {

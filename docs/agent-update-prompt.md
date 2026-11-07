@@ -5,7 +5,7 @@
 英語版は[agent-update-prompt.en.md](agent-update-prompt.en.md)です（内容は同じ）。
 
 ```text
-このMacのItJustTalksを、同じ署名を保ってソースから更新してください。
+このMacのItJustTalksを0.1.1へ、同じ署名を保ってソースから更新してください。
 取得元: https://github.com/GrShin5/ItJustTalks
 
 守ること:
@@ -17,11 +17,19 @@
 - 変更済みソースや競合を見つけたら停止し、勝手に破棄・上書きしないでください。コミット、push、公開、不要なファイル削除はしないでください。
 - エラー時はそこで止め、原因と必要な次の操作を説明してください。署名や識別子の不一致を迂回しないでください。アプリ起動や録音・文章入力の確認はユーザーに任せてください。
 
+macOS 27以上、AI機能にはApple silicon、Apple Intelligenceの有効化、モデル準備、MacとSiriの言語の一致が必要です。Command Line Tools（コマンドで開発するためのApple製ツール。Gitを含む）だけで導入できます。フルXcodeは不要です（Xcode 27も使用可）。Homebrew・OpenSSL 3の追加導入も不要です。/Applicationsへ書き込めるアカウント（通常は管理者）と2 GBの空き容量が必要です。
+
+事前承認：まず読取りだけでOS・開発ツール・作業場所・既存アプリを確認してください。変更前に1通で、必要なcloneと~/Developer/ItJustTalksへの書込み、必要時の既存証明書のコード署名だけの信頼設定（新しい証明書は作りません）、/Applicationsへの配置、制限環境での対象スクリプトだけのサンドボックス外実行の承認をまとめて得てください。拒否されたら停止してください。ユーザーが操作するのは、不足時の xcode-select --install の画面、キーチェーン認証画面（1〜2回出ることがあります）、導入後のFinder起動とマイク・音声認識・アクセシビリティの許可画面です。下記の旧版退避直前の了承も残してください。
+
+証明書：foundは再利用、untrustedは既存証明書の信頼だけを修復します（承認後にエージェントが bash scripts/make_signing_cert.sh を実行し、ユーザーが認証画面を操作します。信頼は security add-trusted-cert -p codeSign に限定します。終了3は認証画面を閉じたか時間切れなので、同じスクリプトで再開します）。更新では新しい証明書を作りません。absent（証明書なし）は旧版と同じ署名を続けられないため、作成せずに停止し、ユーザーに説明してください。duplicate（ラベル「ItJustTalks Dev」が複数で署名IDを1つに決められない）・inaccessible（不在以外のキーチェーンエラー）も停止します。手動Keychain Accessはスクリプトが失敗して案内した場合だけです。旧版との署名継続が必須です。
+
+エージェントのサンドボックス（コマンドの動作範囲を制限する仕組み）では、Swiftのプラグインサーバー、署名の信頼判定（CSSMERR_TP_NOT_TRUSTED）、キーチェーン、~/Developerや/Applicationsへの書込みが失敗する場合があります。Macの故障とは限りません。`codesign -dvv` の表示の署名者欄が Authority=(unavailable) になることもありますが、署名者の不一致とは限りません。署名の照合は scripts/verify_app_identity.sh で行い、不合格なら停止してください。承認済みの実行範囲で再実行し、検証を無効にして通さないでください。
+
 手順:
 1. macOS 27以上、開発ツール、Apple SiliconとApple Intelligenceの利用条件を確認してください。preflightはmacOS 27以上を確認します。Core 3搭載Macは未確認です。
 2. 現在インストールされているItJustTalks.appとその版を特定し、通常のアプリでありsymlinkや別製品ではないことを確認してください。ユーザーに作業を保存してItJustTalksを終了してもらい、終了を確認してください。アプリのデータフォルダは操作しないでください。
 3. ソースのremote・ブランチ・git status --shortを確認してください。未コミット変更・競合・取得元不一致なら停止してください。ソースはZIPダウンロードではなく git clone https://github.com/GrShin5/ItJustTalks で取得したものを使ってください。Desktop・Documents・iCloud Drive・File Provider配下は使わず、必要なら例えば ~/Developer/ItJustTalks へ新しくcloneし、ユーザーが選んだ更新先のタグまたはコミットを使ってください。勝手にmainへ切り替えたりローカル変更を消したりしないでください。現在版・更新先版・コミットを報告してください。
-4. docs/manual/ja.mdの付録B・Dとスクリプトを読み、bash scripts/preflight.sh を実行してください。既存アプリの検出は更新では想定内ですが、他の失敗は無視しないでください。既存証明書を再利用し、証明書不在・不達・未信頼を区別してください。新規作成が必要なら事前承認を得て bash scripts/make_signing_cert.sh を実行しますが、旧版と署名が継続しなければ更新を中止してください。
+4. docs/manual/ja.mdの付録B・Dとスクリプトを読み、bash scripts/preflight.sh を実行してください。既存アプリの検出は更新では想定内ですが、他の失敗は無視しないでください。既存証明書を再利用し、証明書不在・不達・未信頼を区別してください。未信頼なら事前承認を得て bash scripts/make_signing_cert.sh で信頼だけを修復します。証明書が無い場合は新しく作らず、更新を中止してください（新しい証明書では旧版と署名が継続しません）。
 5. 確認した旧アプリのパスをシェル変数 previous_app に保持し、bash scripts/verify_app_identity.sh "$previous_app" を実行してください。失敗した場合、署名移行を独断で進めないでください。
 6. bash scripts/make_app.sh release --previous-app "$previous_app" を実行してください。続いて bash scripts/verify_app_identity.sh "$previous_app" dist/ItJustTalks.app でBundle ID・署名者・署名要件の継続を確認してください。不一致なら旧版を動かさず停止してください。
 7. install_app.shは既存アプリを上書きしません。検証済み新版、退避先、配置先、復旧方法を具体的に示し、旧アプリ退避の直前にユーザーの了承を得てください。旧版は削除せず、同じローカルディスクの同期対象外に一意の退避フォルダを作り、その中へ移動してください。既存項目を上書きせず、移動後も旧版の検証を行ってください。移動権限がなければユーザーにFinder操作を任せてください。

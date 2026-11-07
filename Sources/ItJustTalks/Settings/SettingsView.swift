@@ -257,15 +257,15 @@ struct SettingsView: View {
     @ObservedObject var dictionaryStore: PersonalDictionaryStore
     @ObservedObject var customInstructionStateStore: CustomInstructionStateStore
     @ObservedObject var aiCommandCustomInstructionStateStore: CustomInstructionStateStore
-    @State private var selectedTab: SettingsTab = .settings
-    @State private var isCapturingKey = false
-    @State private var keyCaptureTarget: KeyCaptureTarget = .normal
+    @ViewState private var selectedTab: SettingsTab = .settings
+    @ViewState private var isCapturingKey = false
+    @ViewState private var keyCaptureTarget: KeyCaptureTarget = .normal
     @StateObject private var keyCaptureMonitor = HotkeyCaptureMonitor()
-    @State private var microphones: [MicrophoneDevice] = []
-    @State private var defaultMicrophoneName = ""
-    @State private var aiCommandSettingsMessage: String?
+    @ViewState private var microphones: [MicrophoneDevice] = []
+    @ViewState private var defaultMicrophoneName = ""
+    @ViewState private var aiCommandSettingsMessage: String?
     /// 初回描画だけは安全側に倒し、`onAppear`で現在のphaseを取り込む。
-    @State private var observedPipelinePhase: PipelinePhase = .starting
+    @ViewState private var observedPipelinePhase: PipelinePhase = .starting
     /// ホットキー由来の重い判定のキャッシュ。**`body`の中で計算しないこと。**
     ///
     /// `AppState`を全体購読すると、`audioLevel`の更新で録音中に`body`が毎秒数十回、
@@ -277,47 +277,47 @@ struct SettingsView: View {
     /// これは`RecordingHUD.swift:483-492`に記録されている競合と同じ機構で、実機では
     /// `volatileIntervalMedianMs`が0→189〜286、ハンズフリー送信の応答が
     /// 362〜406ms→556〜709msへ悪化した（2026-08-08 実測）。
-    @State private var cachedClipboardVariantEligibilities: [
+    @ViewState private var cachedClipboardVariantEligibilities: [
         AICommandClipboardModifier: AICommandClipboardChordPolicy.Eligibility
     ] = Dictionary(
         uniqueKeysWithValues: AICommandClipboardModifier.allCases.map { ($0, .eligible) }
     )
-    @State private var cachedClipboardVariantPickerOptions = AICommandClipboardModifier.allCases
-    @State private var cachedClipboardVariantEligibilityMessage: String?
-    @State private var cachedNormalHoldStartRequiresSpecialChordResolution = false
-    @State private var isResettingAIProcessing = false
-    @State private var appleIntelligenceStatus = AppleIntelligenceStatus.current()
-    @State private var aiProcessingResetStatus: AIProcessingResetStatus?
-    @State private var aiProcessingResetDismissTask: Task<Void, Never>?
-    @State private var historyViewMode: HistoryViewMode = .normal
-    @State private var historyModeFilter: HistoryModeFilter = .all
-    @State private var selectedHistoryIDs: Set<UUID> = []
-    @State private var historyDeletionRequest: HistoryDeletionRequest?
-    @State private var historyDeleteTarget: UUID?
-    @State private var historySearchText = ""
-    @State private var historyOperationMessage: String?
-    @State private var pendingHistoryRetentionChange: HistoryRetentionChangeRequest?
-    @State private var hoveredHistoryCopyID: UUID?
-    @State private var copiedHistoryEntryID: UUID?
+    @ViewState private var cachedClipboardVariantPickerOptions = AICommandClipboardModifier.allCases
+    @ViewState private var cachedClipboardVariantEligibilityMessage: String?
+    @ViewState private var cachedNormalHoldStartRequiresSpecialChordResolution = false
+    @ViewState private var isResettingAIProcessing = false
+    @ViewState private var appleIntelligenceStatus = AppleIntelligenceStatus.current()
+    @ViewState private var aiProcessingResetStatus: AIProcessingResetStatus?
+    @ViewState private var aiProcessingResetDismissTask: Task<Void, Never>?
+    @ViewState private var historyViewMode: HistoryViewMode = .normal
+    @ViewState private var historyModeFilter: HistoryModeFilter = .all
+    @ViewState private var selectedHistoryIDs: Set<UUID> = []
+    @ViewState private var historyDeletionRequest: HistoryDeletionRequest?
+    @ViewState private var historyDeleteTarget: UUID?
+    @ViewState private var historySearchText = ""
+    @ViewState private var historyOperationMessage: String?
+    @ViewState private var pendingHistoryRetentionChange: HistoryRetentionChangeRequest?
+    @ViewState private var hoveredHistoryCopyID: UUID?
+    @ViewState private var copiedHistoryEntryID: UUID?
     @StateObject private var instructionOptimization = InstructionOptimizationSession()
-    @State private var instructionOptimizationTask: Task<Void, Never>?
+    @ViewState private var instructionOptimizationTask: Task<Void, Never>?
     private var isOptimizingCustomInstruction: Bool { instructionOptimization.runningMode == .normal }
     private var isOptimizingAICommandCustomInstruction: Bool { instructionOptimization.runningMode == .aiCommand }
-    @State private var customInstructionMessage: String?
-    @State private var customInstructionDraft = ""
-    @State private var customInstructionHistoryCursor = -1
-    @State private var aiCommandCustomInstructionMessage: String?
-    @State private var aiCommandCustomInstructionDraft = ""
-    @State private var aiCommandCustomInstructionHistoryCursor = -1
-    @State private var isChangingSpeechLanguage = false
-    @State private var languageSettingsMessage: String?
-    @State private var showsExternalSendConfirmation = false
-    @State private var handsFreeSendSettingsMessage: String?
-    @State private var handsFreeSendCustomPhraseDraft = ""
-    @State private var handsFreeSendCustomPhraseError: String?
+    @ViewState private var customInstructionMessage: String?
+    @ViewState private var customInstructionDraft = ""
+    @ViewState private var customInstructionHistoryCursor = -1
+    @ViewState private var aiCommandCustomInstructionMessage: String?
+    @ViewState private var aiCommandCustomInstructionDraft = ""
+    @ViewState private var aiCommandCustomInstructionHistoryCursor = -1
+    @ViewState private var isChangingSpeechLanguage = false
+    @ViewState private var languageSettingsMessage: String?
+    @ViewState private var showsExternalSendConfirmation = false
+    @ViewState private var handsFreeSendSettingsMessage: String?
+    @ViewState private var handsFreeSendCustomPhraseDraft = ""
+    @ViewState private var handsFreeSendCustomPhraseError: String?
     /// 保存で確定したら入力欄をロックする。キャレットが点滅し続けると
     /// 保存されたのか分からない。「編集」で再び開く。
-    @State private var handsFreeSendCustomPhraseIsEditing = false
+    @ViewState private var handsFreeSendCustomPhraseIsEditing = false
     @FocusState private var handsFreeSendCustomPhraseFieldIsFocused: Bool
 
     private var uiMetrics: SettingsUIScaleMetrics {
@@ -2856,7 +2856,7 @@ enum KeyNameFormatter {
 private struct CustomInstructionLengthIndicator: View {
     let text: String
     let language: AppLanguage
-    @State private var measurement: CustomInstructionLength?
+    @ViewState private var measurement: CustomInstructionLength?
 
     private func uiText(_ key: String) -> String { AppLocalizer.text(key, language: language) }
 

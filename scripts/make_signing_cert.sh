@@ -6,9 +6,9 @@
 # （マイク・音声認識・アクセシビリティ）が再ビルドのたびに無効化されてしまう。
 # 安定した自己署名証明書を使うことで、再ビルド後もTCC権限を再登録せずに済む。
 #
-# 既に "ItJustTalks Dev" 証明書が存在すればスキップし、証明書のSHA-1ハッシュを出力する。
+# 信頼済みならSHA-1を表示。未信頼なら既存証明書を再利用しmacOS認証で再開する。
 # CIなど非対話環境では --non-interactive を渡すと、作成不可の場合でも失敗させず
-# メッセージを出してスキップする。
+# 状態だけを表示する。
 set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/ui_lang.sh"
@@ -32,7 +32,7 @@ done
 if [[ "$INTERACTIVE_HELP" -eq 1 ]]; then
   printf '%s\n' "$(t '=== 既存証明書の信頼修復 ===
 「キーチェーンアクセス.app」で「ログイン」の "ItJustTalks Dev" を検索し、ダブルクリック。
-「信頼」を展開し「コード署名」を「常に信頼」に変更し、macOSの認証を完了してください。
+「信頼」を展開し「コード署名」だけを「常に信頼」に変更し、macOSの認証を完了してください。
 既存証明書がある場合は新しく作成しないでください。crtファイルは不要です。
 
 === 証明書がない場合の手動作成手順 ===
@@ -49,7 +49,7 @@ if [[ "$INTERACTIVE_HELP" -eq 1 ]]; then
 
 作成後、このスクリプトを再実行すればハッシュが表示されます。' '=== Repair trust for an existing certificate ===
 Open Keychain Access, find "ItJustTalks Dev" in the login Keychain, and double-click it.
-Expand Trust, set Code Signing to Always Trust, and complete macOS authentication.
+Expand Trust, set only Code Signing to Always Trust, and complete macOS authentication.
 Do not create another certificate if one already exists. No crt file is needed.
 
 === Manually create a certificate if none exists ===
@@ -76,168 +76,149 @@ existing_hash() {
     'index($0, "\"" certificate_name "\"") && $2 ~ /^[[:xdigit:]]{40}$/ { print toupper($2); exit }'
 }
 
-# codesigning用アイデンティティ（信頼済み）として既に使える場合。
+
+# Exit codes: 0 = a trusted code-signing identity is ready (or --non-interactive reported the state),
+# 1 = stopped (duplicate certificates, inaccessible keychain, or a generation/import error),
+# 3 = the certificate is registered but the trust dialog was cancelled or timed out (rerun to resume).
+# Non-interactive mode never changes the keychain and never shows an authentication dialog.
 KEYCHAIN_STATE="$(itjusttalks_keychain_state)"
-if [[ "$KEYCHAIN_STATE" == inaccessible ]]; then
-  echo "$(t '=== 失敗: Keychainにアクセスできません ===' "=== Failed: Cannot access the Keychain ===")" >&2
-  echo "$(t '証明書なしとして扱わず、Keychainを解除してから再実行してください。' "Unlock the Keychain and retry. This is not treated as a missing certificate.")" >&2
-  exit 1
-fi
-HASH="$(existing_hash || true)"
-if [[ -n "$HASH" ]]; then
-  echo "$(t "=== 証明書 \"$CERT_NAME\" は既に存在し、信頼設定済みです ===" "=== Certificate \"$CERT_NAME\" already exists and is trusted ===")"
-  echo "$(t "SHA-1: $HASH" "SHA-1: $HASH")"
-  exit 0
-fi
+if [[ $NON_INTERACTIVE -eq 1 ]]; then echo "$KEYCHAIN_STATE"; exit 0; fi
+case "$KEYCHAIN_STATE" in
+  found)
+    echo "$(t "=== 証明書 \"$CERT_NAME\" は既に存在し、信頼設定済みです ===" "=== Certificate \"$CERT_NAME\" already exists and is trusted ===")"
+    echo "SHA-1: $(existing_hash || true)"
+    exit 0 ;;
+  duplicate)
+    echo "$(t "=== 停止: \"$CERT_NAME\" という証明書が複数あります ===" "=== Stopped: there is more than one certificate named \"$CERT_NAME\" ===")" >&2
+    echo "$(t '新しい証明書は作りません。どれを残すかはご本人がキーチェーンアクセスで確認してください。' 'No new certificate is created. Check in Keychain Access which one to keep.')" >&2
+    exit 1 ;;
+  inaccessible)
+    echo "$(t '=== 停止: キーチェーンにアクセスできません ===' '=== Stopped: the keychain is inaccessible ===')" >&2
+    echo "$(t '証明書なしとは扱いません。ログインキーチェーンのロックを解除してから再実行してください。' 'This is not treated as a missing certificate. Unlock the login keychain and retry.')" >&2
+    exit 1 ;;
+esac
 
-# keychainに証明書自体は存在するが信頼設定が未完了の場合（再実行での重複作成を防ぐ）。
-# 冪等性のため、この時点で既に証明書がkeychainにあれば新規作成せず案内のみ再表示する。
-EXISTING_CERT_IN_KEYCHAIN="$(security find-certificate -c "$CERT_NAME" "$HOME/Library/Keychains/login.keychain-db" 2>/dev/null | grep -c "labl" || true)"
-if [[ "${EXISTING_CERT_IN_KEYCHAIN:-0}" -gt 0 ]]; then
-  echo "$(t "=== 証明書 \"$CERT_NAME\" はkeychainに既に存在しますが、信頼設定（Trust）が未完了です ===" "=== Certificate \"$CERT_NAME\" exists in the Keychain, but trust setup is incomplete ===")"
-  PERSISTENT_CERT_DIR="$HOME/Library/Application Support/ItJustTalks"
-  PERSISTENT_CERT_PATH="$PERSISTENT_CERT_DIR/itjusttalks_dev_cert.crt"
-  if [[ -f "$PERSISTENT_CERT_PATH" ]]; then
-    echo "$(t "信頼設定を完了するには以下を実行し、認証ダイアログで承認してください:" "To complete trust setup, run the following and approve the authentication dialog:")" >&2
-    echo "$(t "  security add-trusted-cert -k \"\$HOME/Library/Keychains/login.keychain-db\" \"$PERSISTENT_CERT_PATH\"" "  security add-trusted-cert -k \"\$HOME/Library/Keychains/login.keychain-db\" \"$PERSISTENT_CERT_PATH\"")" >&2
-  else
-    echo "$(t "手動作成手順: bash $0 --interactive-help" "Manual setup instructions: bash $0 --interactive-help")" >&2
-  fi
-  exit 0
-fi
-
-echo "$(t "=== 証明書 \"$CERT_NAME\" が見つかりません ===" "=== Certificate \"$CERT_NAME\" was not found ===")"
-
-
-if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
-  echo "$(t "非対話モードのため証明書作成をスキップします。" "Skipping certificate creation in non-interactive mode.")"
-  echo "$(t "手動作成手順が必要な場合は: bash $0 --interactive-help" "For manual setup instructions: bash $0 --interactive-help")"
-  exit 0
-fi
-
-# macOS標準の/usr/bin/opensslはLibreSSLで、-legacy等のOpenSSL 3専用オプションを解さない。
-# 事前に実体を判定し、OpenSSL 3でなければ代替パスを探す。見つからなければ、40行以上の
-# usageダンプをユーザーに見せる前に、ここで日本語メッセージを出して停止する。
-if ! OPENSSL_BIN="$(itjusttalks_find_openssl3)"; then
-  echo "$(t "=== 失敗: OpenSSL 3が見つかりません ===" "=== Failed: OpenSSL 3 was not found ===")" >&2
-  echo "$(t "候補はPATHと既知のHomebrew場所について実体の version 出力で検証しました。" "Candidates on PATH and in known Homebrew locations were checked using their version output.")" >&2
-  echo "$(t "以下を実行してOpenSSL 3を導入してから再実行してください:" "Install OpenSSL 3 with the following command, then retry:")" >&2
-  echo "$(t "  brew install openssl@3" "  brew install openssl@3")" >&2
-  exit 1
-fi
-
-# 自己署名コード署名証明書を自動生成する。
-# security create-keychainは使わず、既定のログインkeychainへ証明書を追加する形を取る。
-# opensslで自己署名証明書＋秘密鍵を生成し、PKCS#12として一時的にエクスポートしてから
-# securityコマンドでログインkeychainへインポートする（ユーザーのkeychainパスワード入力を
-# 極力避けるため、既にアンロック状態のログインkeychainへの追加を試みる）。
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
-
-KEY_PATH="$WORKDIR/itjusttalks_dev.key"
-CERT_PATH="$WORKDIR/itjusttalks_dev.crt"
-P12_PATH="$WORKDIR/itjusttalks_dev.p12"
-# This passphrase protects only the short-lived PKCS#12 file in WORKDIR.  It is
-# generated per run, never printed, and becomes unusable when the trap removes
-# that directory.
-P12_PASSWORD="$("$OPENSSL_BIN" rand -hex 32)"
-
-echo "$(t "=== 自己署名証明書を生成しています ===" "=== Generating a self-signed certificate ===")"
-REQ_LOG="$WORKDIR/openssl_req.log"
-if ! "$OPENSSL_BIN" req -x509 -newkey rsa:2048 -keyout "$KEY_PATH" -out "$CERT_PATH" \
-  -days 3650 -nodes -subj "/CN=$CERT_NAME" \
-  -addext "keyUsage=critical,digitalSignature" \
-  -addext "extendedKeyUsage=critical,codeSigning" >"$REQ_LOG" 2>&1; then
-  echo "$(t "=== 失敗: 自己署名証明書の生成に失敗しました ===" "=== Failed: Could not generate the self-signed certificate ===")" >&2
-  cat "$REQ_LOG" >&2
+CERT_PATH="$WORKDIR/certificate.pem"
+LOGIN_KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
+fail() {
+  echo "$(t "=== 失敗: $1 ===" "=== Failed: $2 ===")" >&2
+  echo "$(t "手作業での手順（最後の手段）: bash $0 --interactive-help" "Manual steps (last resort): bash $0 --interactive-help")" >&2
   exit 1
-fi
+}
 
-# -legacy: OpenSSL 3.x はデフォルトでAES暗号化のPKCS#12を生成するが、macOSの
-# securityコマンド（SecKeychainItemImport）はこれを正しく復号できずMAC検証エラーになる
-# 場合がある。-legacyでRC2/3DES系の従来形式にすることでmacOS側と互換性を持たせる。
-# OPENSSL_BINはOpenSSL 3であることを確認済みのため、-legacyオプションが解釈される。
-P12_PASSWORD="$P12_PASSWORD" "$OPENSSL_BIN" pkcs12 -export -out "$P12_PATH" -inkey "$KEY_PATH" -in "$CERT_PATH" \
-  -name "$CERT_NAME" -passout env:P12_PASSWORD -legacy
-
-echo "$(t "=== ログインkeychainへインポートしています ===" "=== Importing into the login Keychain ===")"
-if security import "$P12_PATH" -k "$HOME/Library/Keychains/login.keychain-db" \
-  -P "$P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security; then
-  echo "$(t "インポートに成功しました。" "Import succeeded.")"
+if [[ "$KEYCHAIN_STATE" == untrusted ]]; then
+  # Reuse the single existing certificate: export it and run only the trust step.
+  echo "$(t "=== 既存の証明書 \"$CERT_NAME\" を再利用し、信頼設定だけを行います ===" "=== Reusing the existing certificate \"$CERT_NAME\"; only the trust setting is needed ===")"
+  # -c is a substring search, so bind the exported PEM to the SHA-1 of the exact-label entry.
+  metadata="$(security find-certificate -a -Z -c "$CERT_NAME" "$LOGIN_KEYCHAIN" 2>/dev/null)" \
+    || fail '既存の証明書を読み出せませんでした' 'Could not read the existing certificate'
+  expected_hash="$(printf '%s\n' "$metadata" | awk '
+    /^SHA-1 hash:/ {hash=$3}
+    /"labl"<blob>="ItJustTalks Dev"$/ {print toupper(hash)}')"
+  [[ "$expected_hash" =~ ^[[:xdigit:]]{40}$ ]] || fail '既存の証明書を特定できませんでした' 'Could not identify the existing certificate'
+  security find-certificate -a -c "$CERT_NAME" -p "$LOGIN_KEYCHAIN" >"$WORKDIR/all.pem" 2>/dev/null \
+    || fail '既存の証明書を書き出せませんでした' 'Could not export the existing certificate'
+  awk -v dir="$WORKDIR" '
+    /-----BEGIN CERTIFICATE-----/ {n++; file=dir "/export-" n ".pem"}
+    n {print >file}
+    /-----END CERTIFICATE-----/ {close(file)}
+  ' "$WORKDIR/all.pem"
+  matched=0
+  for pem in "$WORKDIR"/export-*.pem; do
+    [[ -f "$pem" ]] || continue
+    fingerprint="$(/usr/bin/openssl x509 -in "$pem" -noout -fingerprint -sha1 2>/dev/null || true)"
+    fingerprint="${fingerprint#*=}"
+    fingerprint="$(printf '%s' "${fingerprint//:/}" | tr '[:lower:]' '[:upper:]')"
+    if [[ "$fingerprint" == "$expected_hash" ]]; then
+      cp "$pem" "$CERT_PATH"; matched=1; break
+    fi
+  done
+  [[ $matched -eq 1 ]] || fail '既存の証明書を書き出せませんでした' 'Could not export the existing certificate'
 else
-  echo "$(t "インポートに失敗しました。keychainがロックされている可能性があります。" "Import failed. The Keychain may be locked.")" >&2
-  echo "$(t "手動作成手順: bash $0 --interactive-help" "Manual setup instructions: bash $0 --interactive-help")" >&2
-  exit 1
+  echo "$(t "=== 証明書 \"$CERT_NAME\" が見つからないため、新しく作成します ===" "=== Certificate \"$CERT_NAME\" was not found; creating it ===")"
+  # OpenSSL 3 if present (needs -legacy for a PKCS#12 that macOS can import); otherwise macOS's
+  # built-in LibreSSL, whose PKCS#12 export already uses the legacy RC2/3DES format.
+  tool="$(itjusttalks_find_certificate_tool)" \
+    || fail 'OpenSSL 3 も macOS標準のLibreSSL も見つかりません' 'Neither OpenSSL 3 nor macOS LibreSSL was found'
+  IFS=$'\t' read -r kind OPENSSL_BIN <<<"$tool"
+  KEY_PATH="$WORKDIR/key.pem"
+  P12_PATH="$WORKDIR/certificate.p12"
+  # A config file (instead of -addext) works with both LibreSSL and OpenSSL 3.
+  cat >"$WORKDIR/req.cnf" <<'CONFIG'
+[req]
+distinguished_name=dn
+x509_extensions=extensions
+prompt=no
+[dn]
+CN=ItJustTalks Dev
+[extensions]
+basicConstraints=critical,CA:true
+subjectKeyIdentifier=hash
+authorityKeyIdentifier=keyid:always
+keyUsage=critical,digitalSignature
+extendedKeyUsage=critical,codeSigning
+CONFIG
+  if ! "$OPENSSL_BIN" req -x509 -newkey rsa:2048 -nodes -days 3650 -config "$WORKDIR/req.cnf" \
+      -keyout "$KEY_PATH" -out "$CERT_PATH" >"$WORKDIR/req.log" 2>&1; then
+    cat "$WORKDIR/req.log" >&2
+    fail '自己署名証明書を生成できませんでした' 'Could not generate the self-signed certificate'
+  fi
+  # This passphrase protects only the short-lived PKCS#12 file in WORKDIR. It is generated per run,
+  # never printed, and becomes unusable when the trap removes that directory.
+  P12_PASSWORD="$("$OPENSSL_BIN" rand -hex 32)"
+  legacy_flag=""
+  [[ "$kind" == openssl3 ]] && legacy_flag="-legacy"
+  if ! P12_PASSWORD="$P12_PASSWORD" "$OPENSSL_BIN" pkcs12 -export -out "$P12_PATH" -inkey "$KEY_PATH" \
+      -in "$CERT_PATH" -name "$CERT_NAME" -passout env:P12_PASSWORD $legacy_flag >"$WORKDIR/p12.log" 2>&1; then
+    cat "$WORKDIR/p12.log" >&2
+    fail '証明書を書き出せませんでした' 'Could not export the certificate'
+  fi
+  echo "$(t '=== ログインキーチェーンへ登録しています ===' '=== Registering it in the login keychain ===')"
+  if ! security import "$P12_PATH" -k "$LOGIN_KEYCHAIN" -P "$P12_PASSWORD" -T /usr/bin/codesign >/dev/null; then
+    fail '登録できませんでした（ログインキーチェーンがロックされている可能性があります）' 'Could not register it (the login keychain may be locked)'
+  fi
+  unset P12_PASSWORD
+  rm -f "$KEY_PATH" "$P12_PATH"
 fi
 
-# コード署名で使えるように、信頼設定に「常に信頼」を付与する（自己署名のため必要）。
-# 重要: `add-trusted-cert` はGUIの認証ダイアログ（Touch ID/パスワード入力）を要求する。
-# これは意図的なOSのセキュリティゲートであり、非対話シェルからは絶対に自動承認できない。
-# timeout/gtimeoutが使えればそれで打ち切るが、どちらも無い素のmacOS環境ではタイムアウトせず
-# 直接実行する（承認されるまでブロックするのは、導入作業中は正しい挙動のため）。
-# 打ち切りは「席を外した人を無限に待たない」ための保険であって、承認そのものを
-# 急かすためのものではない。Touch IDやパスワード入力に人間が要する時間より短くしない。
-TRUST_TIMEOUT_SECONDS=180
+# Trust only for the code-signing policy (-p codeSign). This shows a macOS authentication dialog
+# (Touch ID or password) that only the user can approve; it can never be approved by a script.
+# If it fails, never retry with broader trust. The timeout only avoids waiting forever for someone
+# who left the Mac; it must not be shorter than a person needs for Touch ID or a password.
+echo ""
+echo "$(t 'これから macOS の認証画面が出ます。Touch ID またはパスワードで承認してください。' 'A macOS authentication dialog will appear. Approve it with Touch ID or your password.')"
+echo "$(t '（この証明書を「コード署名」の用途に限って信頼するための、macOSが求める手順です）' '(macOS requires this step to trust this certificate for code signing only.)')"
+trust_status=0
+TRUST_LOG="$WORKDIR/trust.log"
 if command -v timeout >/dev/null 2>&1; then
-  TIMEOUT_CMD="timeout"
+  timeout 180 security add-trusted-cert -p codeSign -k "$LOGIN_KEYCHAIN" "$CERT_PATH" 2>"$TRUST_LOG" || trust_status=$?
 elif command -v gtimeout >/dev/null 2>&1; then
-  TIMEOUT_CMD="gtimeout"
+  gtimeout 180 security add-trusted-cert -p codeSign -k "$LOGIN_KEYCHAIN" "$CERT_PATH" 2>"$TRUST_LOG" || trust_status=$?
 else
-  TIMEOUT_CMD=""
+  security add-trusted-cert -p codeSign -k "$LOGIN_KEYCHAIN" "$CERT_PATH" 2>"$TRUST_LOG" || trust_status=$?
 fi
-
-echo "$(t "" "")"
-echo "$(t "これから macOS の認証ダイアログが表示されます。Touch ID またはパスワードで承認してください。" "A macOS authentication dialog will appear. Approve it with Touch ID or your password.")"
-echo "$(t "これは自己署名証明書をコード署名用として信頼させるための、macOS が要求する手順です。" "macOS requires this step to trust the self-signed certificate for code signing.")"
-
-TRUST_ADDED=0
-# `-r trustAsRoot` は自己署名ルート証明書向けの厳格な設定だが、macOSによっては
-# `SecTrustSettingsSetTrustSettings: parameters were not valid` エラーで拒否されることがある。
-# `-r trustAsRoot` を省略した通常のadd-trusted-certでも codeSigning EKU を持つ自己署名証明書は
-# `find-identity -p codesigning` に登録されるため、まずこちらを試す。
-if [[ -n "$TIMEOUT_CMD" ]]; then
-  if $TIMEOUT_CMD "$TRUST_TIMEOUT_SECONDS" security add-trusted-cert -k "$HOME/Library/Keychains/login.keychain-db" "$CERT_PATH"; then
-    TRUST_ADDED=1
+if [[ $trust_status -eq 0 ]]; then
+  if [[ "$(itjusttalks_keychain_state)" == found ]]; then
+    echo "$(t "=== 証明書 \"$CERT_NAME\" の準備ができました（コード署名用に信頼済み） ===" "=== Certificate \"$CERT_NAME\" is ready (trusted for code signing) ===")"
+    echo "SHA-1: $(existing_hash || true)"
+    exit 0
   fi
-else
-  if security add-trusted-cert -k "$HOME/Library/Keychains/login.keychain-db" "$CERT_PATH"; then
-    TRUST_ADDED=1
-  fi
+  # Trust was added but the certificate still is not a usable signing identity (for example the
+  # private key is missing or the certificate expired). Rerunning would only repeat the dialog.
+  echo "$(t '=== 停止: 信頼設定はできましたが、署名に使える状態になりません ===' '=== Stopped: trust was added, but the certificate is still not usable for signing ===')" >&2
+  echo "$(t '秘密鍵が無い・期限切れなどの可能性があります。再実行しても解決しないため、説明書の付録B「困った時」を確認してください。' 'The private key may be missing or the certificate may have expired. Rerunning will not fix this; see "Troubleshooting" in Appendix B of the manual.')" >&2
+  exit 1
 fi
-
-NEW_HASH="$(existing_hash || true)"
-
-if [[ "$TRUST_ADDED" -eq 1 && -n "$NEW_HASH" ]]; then
-  echo "$(t "=== 証明書 \"$CERT_NAME\" を作成し、信頼設定も完了しました ===" "=== Certificate \"$CERT_NAME\" was created and trust setup is complete ===")"
-  echo "$(t "SHA-1: $NEW_HASH" "SHA-1: $NEW_HASH")"
-  exit 0
+cat "$TRUST_LOG" >&2
+# Only a cancelled or timed-out authentication is resumable (exit 3). Any other failure stops (exit 1)
+# so that callers do not loop on a dialog that cannot succeed. Trust is never retried more broadly.
+if [[ $trust_status -eq 124 ]] || grep -qiE 'cancel|-60006|-128|user interaction|interaction is not allowed' "$TRUST_LOG"; then
+  echo "$(t '=== 証明書の登録は済んでいますが、信頼設定が完了していません ===' '=== The certificate is registered, but trust is not complete ===')" >&2
+  echo "$(t '認証画面を閉じた・時間切れになった場合は、このスクリプトを再実行すると続きから再開します（新しい証明書は作りません）。' 'If the dialog was cancelled or timed out, rerun this script to resume (no new certificate is created).')" >&2
+  exit 3
 fi
-
-# 証明書自体はkeychainに存在するがcodesigning用アイデンティティとしては未認識
-# （信頼設定が付与されていない）。keychainから証明書を永続パスへ再エクスポートし、
-# WORKDIR削除後も手動コマンドが使えるようにしておく。
-PERSISTENT_CERT_DIR="$HOME/Library/Application Support/ItJustTalks"
-# 証明書の置き場は本人だけが読めるようにする（このスクリプトが作る場合は 700）。
-mkdir -m 700 -p "$PERSISTENT_CERT_DIR"
-PERSISTENT_CERT_PATH="$PERSISTENT_CERT_DIR/itjusttalks_dev_cert.crt"
-security find-certificate -c "$CERT_NAME" -p "$HOME/Library/Keychains/login.keychain-db" > "$PERSISTENT_CERT_PATH" 2>/dev/null || \
-  cp "$CERT_PATH" "$PERSISTENT_CERT_PATH"
-
-CERT_HASH="$("$OPENSSL_BIN" x509 -in "$PERSISTENT_CERT_PATH" -noout -fingerprint -sha1 2>/dev/null | sed 's/^.*=//')"
-echo "$(t "=== 証明書 \"$CERT_NAME\" はkeychainに作成されましたが、信頼設定（Trust）が未完了です ===" "=== Certificate \"$CERT_NAME\" was created in the Keychain, but trust setup is incomplete ===")" >&2
-echo "$(t "SHA-1 (証明書): ${CERT_HASH:-不明}" "SHA-1 (certificate): ${CERT_HASH:-unknown}")" >&2
-echo "$(t "" "")" >&2
-echo "$(t "macOSの仕様上、自己署名証明書を codesign で使えるようにする「常に信頼」設定は" "To enable a self-signed certificate for codesign, macOS requires the Always Trust setting.")" >&2
-echo "$(t "GUIの認証ダイアログでの明示的な承認が必須で、スクリプトから自動化できません。" "You must explicitly approve the authentication dialog; a script cannot automate this approval.")" >&2
-echo "$(t "以下のいずれかの方法で信頼設定を完了してください:" "Complete trust setup using either method below:")" >&2
-echo "$(t "  1. 「キーチェーンアクセス.app」を開き、\"$CERT_NAME\" を検索 → ダブルクリック →" "  1. Open Keychain Access, search for \"$CERT_NAME\", double-click it, then")" >&2
-echo "$(t "     「信頼」セクションを展開 → 「コード署名」を「常に信頼」に変更" "     expand Trust and set Code Signing to Always Trust.")" >&2
-echo "$(t "  2. またはターミナルで以下を実行し、表示される認証ダイアログで承認する:" "  2. Or run the following in Terminal and approve the authentication dialog:")" >&2
-echo "$(t "     security add-trusted-cert -k \"\$HOME/Library/Keychains/login.keychain-db\" \"$PERSISTENT_CERT_PATH\"" "     security add-trusted-cert -k \"\$HOME/Library/Keychains/login.keychain-db\" \"$PERSISTENT_CERT_PATH\"")" >&2
-echo "$(t "" "")" >&2
-echo "$(t "信頼設定完了後、'security find-identity -v -p codesigning' に \"$CERT_NAME\" が表示されます。" "After trust setup, 'security find-identity -v -p codesigning' will list \"$CERT_NAME\".")" >&2
-echo "$(t "信頼設定が完了するまで、scripts/make_app.sh は安全のため.appの作成を停止します。" "Until trust setup is complete, scripts/make_app.sh will stop app creation for safety.")" >&2
-# 証明書自体の作成（keychainへの追加）は成功しているため、スクリプトとしては成功終了とする。
-# 「codesign実行可能な状態への到達」は信頼設定の手動承認という別ステップであり、
-# それが未完了であること自体はこのスクリプトの失敗ではない。
-exit 0
+echo "$(t '=== 停止: 信頼設定に失敗しました ===' '=== Stopped: the trust setting failed ===')" >&2
+echo "$(t "証明書は登録済みです。上のエラーを確認してください。手作業での手順（最後の手段）: bash $0 --interactive-help" "The certificate is registered. Check the error above. Manual steps (last resort): bash $0 --interactive-help")" >&2
+exit 1

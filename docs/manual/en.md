@@ -929,7 +929,7 @@ Certificate states (exact label "ItJustTalks Dev"):
 | found | Trusted code-signing identity |
 | untrusted | In the login keychain but not a valid code-signing identity |
 | absent | Exact-name search reports not found (status 44) |
-| duplicate | Multiple exact-label certificates; stop, never create another |
+| duplicate | No single signing identity can be chosen (two or more valid identities, or none and several exact-label certificates); stop, never create another. One valid identity is used even if an old same-name certificate remains |
 | inaccessible | Any other Keychain error; never treated as absent |
 
 Exactly one of these lines always ends the output.
@@ -1041,7 +1041,7 @@ The current update example is 0.1.0 to 0.1.1.
 4. Review the proposed backup location, installation location, and recovery steps. Approve immediately before the old app is moved aside. Keep the old version instead of deleting it.
 5. Install into the now-empty location and review post-install verification. Open the new version and check settings, history, dictionary, microphone, keys, and insertion of a short synthetic sentence.
 
-`install_app.sh` does not overwrite an existing app. The update prompt combines moving the old app aside with signature checks, stops on failure, and explains recovery. It does not recreate certificates or reset all permissions on its own. Include any new certificate in the initial combined approval; the update must not proceed without signature continuity.
+`install_app.sh` does not overwrite an existing app. The update prompt combines moving the old app aside with signature checks, stops on failure, and explains recovery. It does not recreate certificates or reset all permissions on its own. An update reuses the existing certificate and never creates a new one; it stops if the certificate is missing. Only trust repair for the existing certificate goes into the initial combined approval, and the update must not proceed without signature continuity.
 
 Uploading user data and changing security settings are prohibited. Koedex's app and data are also left untouched. Keep the old app until the new version has passed your checks.
 

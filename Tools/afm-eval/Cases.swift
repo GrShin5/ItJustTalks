@@ -25,6 +25,11 @@ struct CleanupCase: Sendable {
     var mustNotContain: [String]
     var language: String
     var noAnswer: Bool
+    var reference: String? = nil
+    var endsOpen: Bool? = nil
+    var dictionarySurfaces: [String]? = nil
+    var corrections: [LongCorrection]? = nil
+    var tags: [String]? = nil
     var correction: (old: String, new: String)?
 }
 
@@ -144,6 +149,14 @@ enum CaseLoader {
                 mustNotContain: strings(expect["mustNotContain"]),
                 language: expect["language"] as? String ?? "ja",
                 noAnswer: expect["noAnswer"] as? Bool ?? false,
+                reference: expect["reference"] as? String,
+                endsOpen: expect["endsOpen"] as? Bool,
+                dictionarySurfaces: expect["dictionarySurfaces"] as? [String],
+                corrections: (expect["corrections"] as? [JSON])?.compactMap { value in
+                    guard let old = value["old"] as? String, let new = value["new"] as? String else { return nil }
+                    return LongCorrection(old: old, new: new)
+                },
+                tags: expect["tags"] as? [String],
                 correction: correction
             )
         }

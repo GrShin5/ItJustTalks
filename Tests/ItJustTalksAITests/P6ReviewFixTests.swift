@@ -190,7 +190,8 @@ struct P6ReviewFixTests {
         let transcript = ["Bring the zentrix seventeen kit today. ", sentences[1], sentences[2]].joined()
         let entry = DictionaryEntry(preferred: "Zentrix 17", readings: ["zentrix seventeen"])
         let fake = FakeGenerator(script: sentences.map { chunkTestText($0.trimmingCharacters(in: .whitespaces)) },
-            contextSize: chunkTestContext(task: .cleanup, capacity: 40, hints: [DictionaryHint(preferred: "Zentrix 17", readings: ["zentrix seventeen"])]),
+            // Resolved literal spellings are not repeated as prompt hints (cleanup@6).
+            contextSize: chunkTestContext(task: .cleanup, capacity: 40, hints: []),
             charactersPerToken: 1)
         let pipeline = CleanupPipeline(configuration: .init(budgeter: chunkTestBudgeter()))
         let result = await pipeline.run(CleanupInput(transcript: transcript, dictionaryEntries: [entry], promptLanguage: .en, handsFree: true),

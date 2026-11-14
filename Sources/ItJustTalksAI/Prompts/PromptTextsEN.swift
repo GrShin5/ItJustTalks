@@ -63,6 +63,9 @@ enum PromptTextsEN {
     "um honestly I kind of like the second one" → "Honestly, I kind of like the second one."
     "Thanks." → "Thanks"
     With "Spelling: Saoirse (heard as: sersha)": "sersha will call" → "Saoirse will call."
+    "Tomorrow we meet at ten hand out the papers then go to the meeting room" → "Tomorrow we meet at ten, hand out the papers, then go to the meeting room."
+    "When you arrive call me I will pick you up" → "When you arrive, call me. I will pick you up."
+    "About next week the client's availability is" → "About next week, the client's availability is"
     Output: only the cleaned text, with no preface, explanation, or heading.
     """
 

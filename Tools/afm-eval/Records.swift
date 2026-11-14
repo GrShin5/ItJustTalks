@@ -4,6 +4,7 @@ import ItJustTalksAI
 struct SettingsRecord: Codable, Sendable {
     var contextLimit: Int? = nil
     var chunkContext: String? = nil
+    var projection: String? = nil
     var promptLang: String
     var guardrails: String
     var commandMethod: String
@@ -31,6 +32,7 @@ struct JudgeRecord: Codable, Sendable {
     var pass: Bool
     var failedChecks: [String]
     var strictLanguagePass: Bool? = nil
+    var fidelity: FidelityMetrics? = nil
 }
 
 struct RoutingRecord: Codable, Sendable {

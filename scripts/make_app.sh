@@ -8,9 +8,10 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/ui_lang.sh"
 cd "$(dirname "$0")/.."
 ROOT_DIR="$(pwd)"
 
+USAGE="$(t "Usage: $0 [debug|release|onboarding-debug] [--previous-app /path/to/ItJustTalks.app]" "Usage: $0 [debug|release|onboarding-debug] [--previous-app /path/to/ItJustTalks.app]")"
 CONFIGURATION="debug"
 PREVIOUS_APP_PATH=""
-if [[ "$#" -gt 0 && "$1" != "--previous-app" ]]; then
+if [[ "$#" -gt 0 && "$1" != --* ]]; then
   CONFIGURATION="$1"
   shift
 fi
@@ -30,16 +31,19 @@ while [[ "$#" -gt 0 ]]; do
       shift 2
       ;;
     *)
-      echo "$(t "Usage: $0 [debug|release|onboarding-debug] [--previous-app /path/to/ItJustTalks.app]" "Usage: $0 [debug|release|onboarding-debug] [--previous-app /path/to/ItJustTalks.app]")" >&2
+      echo "$USAGE" >&2
       exit 1
       ;;
   esac
 done
 
-if [[ "$CONFIGURATION" != "debug" && "$CONFIGURATION" != "release" && "$CONFIGURATION" != "onboarding-debug" ]]; then
-  echo "$(t "Usage: $0 [debug|release|onboarding-debug] [--previous-app /path/to/ItJustTalks.app]" "Usage: $0 [debug|release|onboarding-debug] [--previous-app /path/to/ItJustTalks.app]")" >&2
-  exit 1
-fi
+case "$CONFIGURATION" in
+  debug|release|onboarding-debug) ;;
+  *)
+    echo "$USAGE" >&2
+    exit 1
+    ;;
+esac
 
 # 前提条件をまとめて検査してから始める。90秒のコンパイルを終えた後に、
 # 事前に分かる理由で失敗させないための入口。
@@ -164,7 +168,7 @@ fi
 BRANDING_DIR="$ROOT_DIR/Assets/Branding"
 BRANDING_ICONSET_DIR="$BRANDING_DIR/ItJustTalks.iconset"
 BRANDING_MENU_TEMPLATE="$BRANDING_DIR/ItJustTalksMenuBarTemplate.pdf"
-if [[ "$CONFIGURATION" == "debug" || "$CONFIGURATION" == "release" ]]; then
+if [[ "$CONFIGURATION" != "onboarding-debug" ]]; then
   [[ -d "$BRANDING_ICONSET_DIR" ]] || {
     echo "$(t "エラー: Dockアイコンのiconsetが見つかりません: $BRANDING_ICONSET_DIR" "Error: Dock icon iconset was not found: $BRANDING_ICONSET_DIR")" >&2
     echo "$(t "=== 失敗: 前提条件が満たされていません ===" "=== Failed: Prerequisites are not met ===")" >&2
@@ -199,7 +203,8 @@ if [[ "$CONFIGURATION" == "debug" || "$CONFIGURATION" == "release" ]]; then
   }
 fi
 
-TARGET_APP_DIR="$ROOT_DIR/dist/$APP_NAME"
+OUTPUT_DIR="$ROOT_DIR/dist"
+TARGET_APP_DIR="$OUTPUT_DIR/$APP_NAME"
 if [[ -n "$PREVIOUS_APP_PATH" ]]; then
   [[ -d "$PREVIOUS_APP_PATH" ]] || {
     echo "$(t "エラー: 更新前のアプリが見つかりません: $PREVIOUS_APP_PATH" "Error: The previous app was not found: $PREVIOUS_APP_PATH")" >&2
@@ -255,8 +260,8 @@ of changing signatures, then follow an explicit migration procedure.")" >&2
   fi
 fi
 
-mkdir -p "$ROOT_DIR/dist"
-STAGING_DIRECTORY="$(mktemp -d "$ROOT_DIR/dist/.itjusttalks-staging.XXXXXX")"
+mkdir -p "$ROOT_DIR/dist" "$OUTPUT_DIR"
+STAGING_DIRECTORY="$(mktemp -d "$OUTPUT_DIR/.itjusttalks-staging.XXXXXX")"
 APP_DIR="$STAGING_DIRECTORY/$APP_NAME"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
@@ -300,7 +305,7 @@ for localization in "$ROOT_DIR"/Sources/ItJustTalks/Resources/*.lproj; do
   cp -R "$localization" "$RESOURCES_DIR/"
 done
 
-if [[ "$CONFIGURATION" == "debug" || "$CONFIGURATION" == "release" ]]; then
+if [[ "$CONFIGURATION" != "onboarding-debug" ]]; then
   echo "$(t "=== Dock・メニューバー用アセットを同梱 ===" "=== Including Dock and menu bar assets ===")"
   iconutil -c icns "$BRANDING_ICONSET_DIR" -o "$RESOURCES_DIR/ItJustTalks.icns"
   cp "$BRANDING_MENU_TEMPLATE" "$RESOURCES_DIR/ItJustTalksMenuBarTemplate.pdf"
@@ -318,9 +323,9 @@ cat > "$CONTENTS_DIR/Info.plist" << PLIST
     <key>CFBundleIdentifier</key>
     <string>$BUNDLE_IDENTIFIER</string>
     <key>CFBundleVersion</key>
-    <string>0.1.1</string>
+    <string>0.2.0</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.1</string>
+    <string>0.2.0</string>
     <key>ItJustTalksBuildGitSHA</key>
     <string>$BUILD_GIT_SHA</string>
     <key>CFBundlePackageType</key>

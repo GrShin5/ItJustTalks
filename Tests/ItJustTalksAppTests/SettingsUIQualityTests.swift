@@ -66,7 +66,7 @@ struct SettingsUIQualityTests {
     }
 
     @Test func historyHelpExplainsStorageWithoutAIAssist() throws {
-        let key = "「履歴をすべて削除」は、保存済み本文とメタデータをすべて削除します。AIアシストがOFFでも、安全に挿入した本文は履歴設定に従って保存・表示されます。AIアシストに失敗した場合など、本文が表示されなくても、使用日時や使用モデル情報などが、このMacにメタデータとして残る可能性があります。"
+        let key = "「履歴をすべて削除」は、保存済み本文とメタデータをすべて削除します。AIアシストがOFFでも、安全に挿入した本文は履歴設定に従って保存・表示されます。AIアシストに失敗して未整形の本文を挿入した場合や、結果ウィンドウに本文を表示した場合も保存します。出力前に中止した場合は保存しません。過去の本文のない履歴も全削除の対象です。"
         try expectLocalizedUIKey(key, in: "Settings/SettingsView.swift")
         #expect(AppLocalizer.text(key, language: .english).contains("Even with AI Assist off"))
     }

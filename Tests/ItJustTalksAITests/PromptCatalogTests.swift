@@ -70,7 +70,7 @@ struct PromptCatalogTests {
     @Test func cleanupHasExamples() {
         for language in PromptLanguage.allCases {
             let text = PromptCatalog.template(.cleanup, language: language).text
-            #expect(PromptCatalog.version(of: .cleanup) >= 2)
+            #expect(PromptCatalog.version(of: .cleanup) == 6)
             #expect(text.contains("→"), "\(language) cleanup has examples")
         }
     }

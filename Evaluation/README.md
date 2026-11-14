@@ -18,6 +18,8 @@ Evaluation/
   accuracy/cleanup.jsonl        accuracy profile (dictionary spellings and corrections)
   fidelity/cleanup.jsonl        fidelity profile (punctuation and wording preservation)
   normal-loop/cleanup.jsonl     additional standard-dictation cleanup cases
+  realistic/, realistic-en/     synthetic realistic dictation cleanup sets (Japanese / English)
+  realistic-holdout/, realistic-holdout-en/   sealed synthetic holdouts (run once per candidate)
   tests/                        offline tests for the evaluation tools
 ```
 
@@ -151,3 +153,19 @@ The revision identifies source only when the caller also verifies a clean checko
 
 Validate the accuracy profile with `python3 -I Evaluation/validate_cases.py --accuracy`.
 Independent sets are checked for exact cross-set input duplicates.
+
+Additional cleanup fidelity metrics (existing pass/fail is unchanged): `expect` may contain optional
+`reference`, `endsOpen`, `dictionarySurfaces`, `corrections: [{old,new}]` and `tags`.
+Tags must be values listed in `FIDELITY_TAGS` in `validate_cases.py`.
+The record's `judge.fidelity` stores refCER, addedChars, unauthorizedDeletedChars, punctuation
+precision/recall/F1 (comma/period), endsOpenKept, dictionaryOccurrences (exact occurrences in the given order),
+dictionaryHits/Total (entries that appeared / entries given), correctionsOK (one boolean per correction) and tags.
+Metrics that depend on an unspecified expectation are omitted. CER and LCS are computed on grapheme clusters
+without punctuation or spaces, with no case or width folding. On ties, LCS prefers deleting from the input.
+addedChars counts output characters not aligned to the transcript, excluding the actual ranges of dictionary
+spellings and counting overlapping ranges once. Punctuation is compared at the LCS position of the preceding
+content character; when neither side has the mark, F1=1.
+Summary's fidelity metrics show, per run and per tag, averages and counts, punctuation micro F1, dictionary hit
+rate, the existing validator's disposition shares and reason counts, and p50/p90 of recorded latency.
+Rates are 0–1 (only the disposition percent is 0–100). All reason codes are shown.
+rescore computes the same additional metrics with the same functions.

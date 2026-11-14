@@ -2,7 +2,7 @@
 
 [日本語](README.ja.md) · [Japanese manual](docs/manual/ja.md) · [English manual](docs/manual/en.md)
 
-ItJustTalks 0.1.1 is a completely free, fully local voice input and writing assistant for macOS 27. It transcribes and cleans up speech, edits, translates or summarizes selected or copied text, and helps draft writing. Derived from Koedex by the same developer and licensed under Apache-2.0, it uses only the on-device model in Apple Foundation Models. No external AI subscription or API key is required.
+ItJustTalks 0.2.0 is a completely free, fully local voice input and writing assistant for macOS 27. It transcribes and cleans up speech, edits, translates or summarizes selected or copied text, and helps draft writing. Derived from Koedex by the same developer and licensed under Apache-2.0, it uses only the on-device model in Apple Foundation Models. No external AI subscription or API key is required.
 
 <p align="center">
   <img src="docs/manual/images/en/onboarding-02-welcome.png" width="420" alt="Welcome screen of the first-time setup">
@@ -34,14 +34,14 @@ The app is designed not to communicate over the network for its processing. Appl
 | --- | --- |
 | OS | macOS 27 or later. The on-device AI uses Apple Foundation Models APIs that first appear in macOS 27, so the package, the app and the preflight check all require 27 |
 | AI | Apple Silicon, Apple Intelligence enabled, and an on-device model ready. **Your Mac and Siri must use the same language supported by Apple Intelligence**; AI does not work if they differ. Check them in System Settings under General > Language & Region and under Apple Intelligence & Siri (or Siri, depending on your Mac). Preparation may take some time after you change either language. Check availability on the actual Mac |
-| Memory and hardware | No minimum RAM or chip-by-chip guarantee. Verified on Apple M5 Max (64GB memory). Also installed and used on an Apple M1 MacBook Air (8GB memory). |
+| Memory and hardware | No minimum RAM or chip-by-chip guarantee. 0.2.0 was built and passed automated tests on Apple M5 Max (64GB memory). Earlier versions (0.1.0 and 0.1.1) were also installed and used on an Apple M1 MacBook Air (8GB memory). |
 | Core 3 Macs | **Unverified** |
 | Languages | UI and speech recognition: Japanese / English. AI output: Automatic / Japanese / English; an explicitly spoken output language takes priority. Other AI languages and their quality are not guaranteed |
 | Permissions | Microphone, Speech Recognition, Accessibility. For apps that cannot accept direct insertion, copy from the result window |
 
 - Recording stops automatically after 1, 3, 5, or 10 minutes (default 5, maximum 10). Selected or copied text is limited to 12,000 characters. No universal character limit for speech transcripts has been established.
 - AI capacity depends on the model, instructions, dictionary, and other overhead. Cleanup can split into up to 8 chunks; AI Command allows up to 16 slots including integration. Questions and replies are not split. Excess text is not silently truncated, and successful chunks alone are not automatically inserted.
-- Uncertain generated results are not automatically used to replace or send text. Ordinary dictation may **insert the entire unedited transcript (or, when a dictionary term applies, the transcript with only dictionary spellings applied) and notify you** when AI is unavailable, fails, times out, or cannot split the text. Results needing review, incomplete recordings (a recognition error, an unfinalized tail, or lost audio), and speech-finalization failures go to the result window for review; nothing is inserted or sent automatically.
+- Uncertain generated results are not automatically used to replace or send text. Ordinary dictation may **insert the entire unedited transcript (or, when a dictionary term applies, the transcript with only dictionary spellings applied) and notify you** when AI is unavailable, fails, times out, or cannot split the text. Results needing review, incomplete recordings (a recognition error, an unfinalized tail, or lost audio), and speech-finalization failures go to the result window for review; nothing is inserted or sent automatically. Exception: in plain dictation (no custom instruction, not hands-free, output in the spoken language), a result the checks question is not shown for review; the text is inserted with every spoken word kept, taking only punctuation, filler removal and dictionary spellings from the AI. Text longer than 4,000 characters is still shown for review.
 - With AI assist on, hands-free cleanup failure, partial success, or review status stops automatic insertion and sending. With AI assist off from the start, the original transcript can be inserted and sent if send conditions are met.
 - Standard dictation and hands-free read the input target again when recording stops. If you moved to another field in the same app during recording, the text may be inserted at the caret there (best effort, including Compatibility Input). AI Command stays bound to the original selection and shows the result window instead if the selection or target no longer matches. Hands-free sending applies its own stricter checks. An uncertain insertion does not trigger automatic repasting or resending.
 - AI may shorten wording or omit parts of long dictation. Long translations and summaries can fail even after splitting. Validation cannot catch every error; check important text and numbers.
@@ -68,7 +68,7 @@ Stop on errors. Reuse a valid existing identity and keep verification enabled. T
 
 ## Privacy
 
-Settings, dictionary, and history use independent local ItJustTalks storage; Koedex data is not automatically migrated. Audio recordings are not saved as files. History defaults to 180 days per mode and can be disabled or deleted in the History tab. Ordinary and hands-free modes store output that meets their saving conditions. AI Command and clipboard mode store only the spoken instruction transcript, not the target text or answer. Content-free processing information may remain. See [Chapter 12](docs/manual/en.md#chapter-12) and [SECURITY.md](SECURITY.md) for reporting.
+Settings, dictionary, and history use independent local ItJustTalks storage; Koedex data is not automatically migrated. Audio recordings are not saved as files. History defaults to 180 days per mode and can be disabled or deleted in the History tab. Each mode saves its final output, including text shown in a window, when output occurs. AI Command and clipboard mode save only output, never the spoken instruction or original clipboard text. See [Chapter 12](docs/manual/en.md#chapter-12) and [SECURITY.md](SECURITY.md) for reporting.
 
 ## Want more accurate AI cleanup and answers? Try Koedex
 

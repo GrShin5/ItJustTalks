@@ -118,6 +118,7 @@ func rescore(_ options: RunOptions, recordsDirectory: URL) throws {
     for (meta, run, score) in expected {
         let k = key(meta.category.rawValue, meta.id, run)
         var failed = ["missingOutput"]
+        var fidelity: FidelityMetrics? = nil
         var strict: Bool? = nil
         var languagePass = false
         let record = records[k]
@@ -136,12 +137,19 @@ func rescore(_ options: RunOptions, recordsDirectory: URL) throws {
             let judged = Judge.executionChecked(score(value), outcome: value.outcome,
                 failureCode: record?.failureCode ?? value.failureCode, validator: value.validator)
             failed = judged.failedChecks
+            fidelity = judged.fidelity
             strict = judged.strictLanguagePass
             languagePass = !failed.contains { $0.hasPrefix("language(") }
         }
         var row: [String: Any] = ["id": meta.id, "category": meta.category.rawValue, "run": run,
                                   "pass": failed.isEmpty, "failedChecks": Array(Set(failed)).sorted(),
                                   "validator": ["status": output?.validator?.status ?? "unavailable"]]
+        if let fidelity {
+            row["fidelity"] = try JSONSerialization.jsonObject(with: JSONLines.encoder.encode(fidelity))
+        }
+        if let validator = output?.validator ?? record?.validator {
+            row["validator"] = ["status": validator.status, "reasons": validator.reasons]
+        }
         if meta.category == .cleanup {
             row["languagePass"] = languagePass
             row["strictLanguagePass"] = strict ?? false

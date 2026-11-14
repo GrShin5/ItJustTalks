@@ -72,6 +72,7 @@ final class Harness: @unchecked Sendable {
         self.settings = SettingsRecord(
             contextLimit: options.contextLimit,
             chunkContext: options.chunkContext.rawValue,
+            projection: options.projection.rawValue,
             promptLang: options.promptLanguage.rawValue,
             guardrails: options.guardrails.rawValue,
             commandMethod: options.commandMethod.rawValue,

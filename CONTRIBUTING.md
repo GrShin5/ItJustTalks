@@ -1,7 +1,7 @@
 # Contributing to ItJustTalks
 
 Thanks for your interest in ItJustTalks. This document covers how to build
-the project, run its checks, and prepare a pull request.
+the project, run its checks, and prepare a pull request. It applies to ItJustTalks 0.2.0.
 
 ## Prerequisites
 
@@ -12,8 +12,8 @@ the project, run its checks, and prepare a pull request.
   all require macOS 27.
 - Swift 6.4 or later (the manifest uses tools version 6.4) with the macOS 27 SDK.
 - Apple Silicon, Apple Intelligence enabled, and on-device models ready
-  for end-to-end AI checks. Verified on Apple M5 Max (64GB memory). Also installed and used on an Apple M1
-  MacBook Air (8GB memory).
+  for end-to-end AI checks. 0.2.0 was built and passed automated tests on Apple M5 Max (64GB memory).
+  Earlier versions (0.1.0 and 0.1.1) were also installed and used on an Apple M1 MacBook Air (8GB memory).
   Core 3 Macs are unverified.
 - Command Line Tools (includes Git) are enough; full Xcode, Homebrew and
   OpenSSL 3 are not required. Certificate creation uses OpenSSL 3 when present,

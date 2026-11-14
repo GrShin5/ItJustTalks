@@ -11,6 +11,7 @@ struct AICommandResultAction: Identifiable {
     let title: String
     let style: Style
     let handler: () -> Void
+    var closesBeforeHandling = false
 }
 
 /// 結果表示は従来どおり前面化するが、外部アプリの操作中に出すWeb確認だけは
@@ -286,8 +287,9 @@ private struct AICommandResultView: View {
         didRunAction = true
         // 確認tokenはwindowを閉じる前に同期でconsumeする。閉鎖通知は未consume tokenを
         // 破棄するため、この順序を逆にすると再試行が常に失われる。
+        if action.closesBeforeHandling { onClose() }
         action.handler()
-        onClose()
+        if !action.closesBeforeHandling { onClose() }
     }
 
     private func copyAnswer() {

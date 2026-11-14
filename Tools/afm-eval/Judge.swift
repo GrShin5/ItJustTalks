@@ -23,7 +23,8 @@ enum Judge {
         }
         if item.noAnswer { failed += checkNoAnswer(source: item.transcript, output: text) }
         return JudgeRecord(pass: failed.isEmpty, failedChecks: failed,
-                           strictLanguagePass: checkLanguage(item.language, in: text).isEmpty)
+                           strictLanguagePass: checkLanguage(item.language, in: text).isEmpty,
+                           fidelity: FidelityMetrics(item, output: output))
     }
 
     /// Deterministic contamination guard, not a semantic answer oracle. Preserve questions and reject
@@ -256,5 +257,154 @@ enum Judge {
 
     static func graphemes(_ items: [String]) -> Int {
         items.reduce(0) { $0 + $1.count }
+    }
+}
+
+/// Additional diagnostics only. Characters are extended grapheme clusters; no case/width folding.
+struct FidelityMetrics: Codable, Sendable {
+    struct Punctuation: Codable, Sendable {
+        var matched: Int
+        var predicted: Int
+        var expected: Int
+        var precision: Double { predicted == 0 ? (expected == 0 ? 1 : 0) : Double(matched) / Double(predicted) }
+        var recall: Double { expected == 0 ? 1 : Double(matched) / Double(expected) }
+        var f1: Double { predicted + expected == 0 ? 1 : 2 * Double(matched) / Double(predicted + expected) }
+        enum CodingKeys: String, CodingKey { case matched, predicted, expected, precision, recall, f1 }
+        init(matched: Int, predicted: Int, expected: Int) {
+            self.matched = matched; self.predicted = predicted; self.expected = expected
+        }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            matched = try c.decode(Int.self, forKey: .matched)
+            predicted = try c.decode(Int.self, forKey: .predicted)
+            expected = try c.decode(Int.self, forKey: .expected)
+        }
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(matched, forKey: .matched); try c.encode(predicted, forKey: .predicted)
+            try c.encode(expected, forKey: .expected); try c.encode(precision, forKey: .precision)
+            try c.encode(recall, forKey: .recall); try c.encode(f1, forKey: .f1)
+        }
+    }
+    var refCER: Double?
+    var addedChars: Int
+    var unauthorizedDeletedChars: Int?
+    var punctuation: [String: Punctuation]?
+    var endsOpenKept: Bool?
+    /// Exact non-overlapping occurrence counts in the order of dictionarySurfaces (no text stored).
+    var dictionaryOccurrences: [Int]?
+    var dictionaryHits: Int?
+    var dictionaryTotal: Int?
+    var correctionsOK: [Bool]?
+    var tags: [String]?
+
+    static func content(_ text: String) -> [Character] {
+        text.filter { c in !c.isWhitespace && !c.unicodeScalars.allSatisfy { CharacterSet.punctuationCharacters.contains($0) } }.map { $0 }
+    }
+
+    /// Deterministic LCS pairs, preferring a source deletion on ties. O(n*m) memory/time.
+    static func alignment(_ a: [Character], _ b: [Character]) -> [(Int, Int)] {
+        let width = b.count + 1
+        var dp = [Int](repeating: 0, count: (a.count + 1) * width)
+        for i in a.indices.reversed() {
+            for j in b.indices.reversed() {
+                dp[i * width + j] = a[i] == b[j] ? 1 + dp[(i + 1) * width + j + 1]
+                    : max(dp[(i + 1) * width + j], dp[i * width + j + 1])
+            }
+        }
+        var i = 0, j = 0
+        var pairs: [(Int, Int)] = []
+        while i < a.count && j < b.count {
+            if a[i] == b[j] { pairs.append((i, j)); i += 1; j += 1 }
+            else if dp[(i + 1) * width + j] >= dp[i * width + j + 1] { i += 1 }
+            else { j += 1 }
+        }
+        return pairs
+    }
+
+    static func distance(_ a: [Character], _ b: [Character]) -> Int {
+        var row = Array(0...b.count)
+        for i in a.indices {
+            var next = [i + 1] + [Int](repeating: 0, count: b.count)
+            for j in b.indices { next[j + 1] = min(next[j] + 1, row[j + 1] + 1, row[j] + (a[i] == b[j] ? 0 : 1)) }
+            row = next
+        }
+        return row[b.count]
+    }
+
+    /// Punctuation boundary = preceding content character. Only aligned boundaries can match.
+    static func marks(_ text: String, allowed: String) -> [Int] {
+        var boundary = 0, result: [Int] = []
+        for c in text {
+            if allowed.contains(c) { result.append(boundary) }
+            if !content(String(c)).isEmpty { boundary += 1 }
+        }
+        return result
+    }
+
+    init(_ item: CleanupCase, output: String) {
+        tags = item.tags
+        let actual = Self.content(output)
+        let sourcePairs = Self.alignment(Self.content(item.transcript), actual)
+        let aligned = Set(sourcePairs.map { $0.1 })
+        // Union actual occurrence spans: overlapping surfaces cannot exempt a character twice.
+        var exempt: Set<Int> = []
+        let chars = Array(output)
+        var contentIndex = [Int?](), count = 0
+        for c in chars {
+            if Self.content(String(c)).isEmpty { contentIndex.append(nil) }
+            else { contentIndex.append(count); count += 1 }
+        }
+        if let surfaces = item.dictionarySurfaces {
+            dictionaryOccurrences = surfaces.map { surface in
+                let needle = Array(surface)
+                guard !needle.isEmpty, needle.count <= chars.count else { return 0 }
+                var hits = 0, i = 0
+                while i + needle.count <= chars.count {
+                    if Array(chars[i..<(i + needle.count)]) == needle {
+                        hits += 1
+                        for k in i..<(i + needle.count) { if let index = contentIndex[k] { exempt.insert(index) } }
+                        i += needle.count
+                    } else { i += 1 }
+                }
+                return hits
+            }
+            dictionaryHits = dictionaryOccurrences?.filter { $0 > 0 }.count
+            dictionaryTotal = surfaces.count
+        }
+        addedChars = actual.indices.filter { !aligned.contains($0) && !exempt.contains($0) }.count
+        var corrections = item.corrections
+        if let single = item.correction {
+            if corrections == nil { corrections = [] }
+            corrections?.append(LongCorrection(old: single.old, new: single.new))
+        }
+        correctionsOK = corrections?.map { !output.contains($0.old) && output.contains($0.new) }
+        if let reference = item.reference {
+            let expected = Self.content(reference)
+            refCER = expected.isEmpty ? nil : Double(Self.distance(expected, actual)) / Double(expected.count)
+            let pairs = Self.alignment(expected, actual)
+            unauthorizedDeletedChars = expected.count - pairs.count
+            var boundaries = [0: 0]
+            for (r, o) in pairs { boundaries[o + 1] = r + 1 }
+            punctuation = [:]
+            for (name, marks) in [("comma", "、，,"), ("period", "。．？！?!.")] {
+                let wanted = Self.marks(reference, allowed: marks)
+                let predicted = Self.marks(output, allowed: marks)
+                var remaining = wanted, hits = 0
+                for boundary in predicted {
+                    if let mapped = boundaries[boundary], let index = remaining.firstIndex(of: mapped) {
+                        hits += 1; remaining.remove(at: index)
+                    }
+                }
+                punctuation?[name] = Punctuation(matched: hits, predicted: predicted.count, expected: wanted.count)
+            }
+            if item.endsOpen == true {
+                let finals = "。．？！?!."
+                let outputFinal = output.trimmingCharacters(in: .whitespacesAndNewlines).last
+                let transcriptFinal = item.transcript.trimmingCharacters(in: .whitespacesAndNewlines).last
+                let introduced = outputFinal.map { finals.contains($0) && transcriptFinal != $0 } ?? false
+                endsOpenKept = !expected.isEmpty && !introduced && actual.suffix(4) == expected.suffix(4)
+            }
+        }
     }
 }

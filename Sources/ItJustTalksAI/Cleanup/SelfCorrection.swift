@@ -19,16 +19,17 @@ public struct SelfCorrectionSpan: Sendable, Hashable {
 /// 1. `hasCue(in:)` decides deterministically whether stage A runs at all.
 /// 2. Stage A (a small structured generation, `SelfCorrectionList`) proposes `{retracted, replacement}` pairs.
 /// 3. `apply(_:to:)` verifies every pair against the transcript and deletes "retracted span + cue +
-///    connecting punctuation", keeping the replacement. Any unverifiable pair → `corrected == nil`, and the
-///    caller falls back to the single-stage cleanup of the original transcript (the validator decides).
+///    connecting punctuation", keeping the replacement. Unverifiable or overlapping proposals are dropped;
+///    verified independent corrections are kept.
 /// 4. Stage B is the normal cleanup of the corrected transcript.
 ///
 /// Pure and deterministic; never logs.
 public enum SelfCorrection {
     // MARK: - Cue vocabulary
 
-    /// Japanese cues (longest first). Contrastive ones ("じゃなくて") also mark plain contrasts, so every cue
-    /// needs a pause (punctuation) right before or right after it to count.
+    /// Japanese cues (longest first). Without a pause, nearby parallel wording is required.
+    /// Cues that only ever mark a correction (no apologies).
+    static let correctionOnlyCuesJA: Set<String> = ["言い直します", "言い直すと", "じゃなくて", "ではなくて", "訂正します", "やっぱり", "じゃなく", "ではなく", "やっぱ", "もとい", "いや"]
     static let cuesJA: [String] = [
         "言い直します", "言い直すと", "間違えました", "失礼しました", "ごめんなさい", "じゃなくて", "ではなくて",
         "訂正します", "違いました", "間違えた", "すみません", "すいません", "やっぱり", "じゃなく", "ではなく",
@@ -62,12 +63,14 @@ public enum SelfCorrection {
     // MARK: - Application
 
     public struct Outcome: Sendable, Hashable {
-        /// Transcript with every proposed correction applied; `nil` when any proposal could not be verified
-        /// (fall back to the single-stage cleanup of the original transcript).
+        /// Transcript with independent verified corrections applied; nil when none can safely be applied.
         public var corrected: String?
         /// Retractions verified in the original transcript (for `ValidationInput.selfCorrections`). On a
         /// fallback this holds the proposals whose retracted text was still found right before a cue.
         public var spans: [SelfCorrectionSpan]
+        /// Counts only safely applied proposals; duplicates and rejected proposals count as dropped.
+        public var verifiedProposals: Int = 0
+        public var droppedProposals: Int = 0
     }
 
     /// Verifies and applies stage-A proposals. A proposal is applied only when its retracted text occurs
@@ -81,24 +84,38 @@ public enum SelfCorrection {
         let lower = lowered(chars)
         var ranges: [Range<Int>] = []
         var spans: [SelfCorrectionSpan] = []
-        var allVerified = true
+        var uncertain: [Range<Int>] = []
+        var fallbackSpans: [(range: Range<Int>, span: SelfCorrectionSpan)] = []
+        // An unverifiable proposal must not license an overlapping deletion in either direction.
+        func markUncertain(_ texts: [String]) {
+            for text in texts where !text.isEmpty {
+                let needle = lowered(Array(text))
+                guard needle.count <= lower.count else { continue }
+                for start in 0...(lower.count - needle.count) {
+                    if lower[start..<(start + needle.count)].elementsEqual(needle) {
+                        uncertain.append(start..<(start + needle.count))
+                    }
+                }
+            }
+        }
         var seen = Set<String>()
 
         for proposal in proposals {
             let retracted = trimmedRetracted(proposal.retracted)
             let replacement = trimmedReplacement(proposal.replacement)
-            guard !retracted.isEmpty else { allVerified = false; continue }
+            guard !retracted.isEmpty else { markUncertain([replacement]); continue }
             guard seen.insert(retracted + "\u{1F}" + replacement).inserted else { continue }
             guard !replacement.isEmpty, retracted != replacement else {
-                allVerified = false
+                markUncertain([retracted, replacement])
                 if let range = locate(retracted, replacement: nil, chars: chars, lower: lower) {
-                    spans.append(SelfCorrectionSpan(retracted: String(chars[range.retracted]), replacement: nil))
+                    fallbackSpans.append((range.deletion, SelfCorrectionSpan(retracted: String(chars[range.retracted]), replacement: nil)))
                 }
                 continue
             }
             // The transcript decides the direction: the text before the cue is the retraction even when the
             // model swapped the two fields. A whole statement is only retracted for another whole statement.
             let narrowed = narrowedStatement(retracted, replacement: replacement)
+                ?? narrowedEnglish(retracted, replacement: replacement)
             if let found = narrowed.flatMap({ locate($0, replacement: replacement, chars: chars, lower: lower) })
                 ?? locate(retracted, replacement: replacement, chars: chars, lower: lower) {
                 ranges.append(found.deletion)
@@ -108,33 +125,50 @@ public enum SelfCorrection {
                 ranges.append(found.deletion)
                 spans.append(SelfCorrectionSpan(retracted: String(chars[found.retracted]), replacement: trimmedReplacement(proposal.retracted)))
             } else {
-                allVerified = false
+                markUncertain([retracted, replacement])
                 // A replacement the transcript does not contain makes the whole proposal unreliable.
                 let replacementKey = ResultValidator.normalizeForMatch(NumberExtractor.replacingNumerals(in: replacement))
                 if !replacementKey.isEmpty,
                    ResultValidator.normalizeForMatch(NumberExtractor.replacingNumerals(in: transcript)).contains(replacementKey),
                    let partial = locate(retracted, replacement: replacement, requireReplacement: false, chars: chars, lower: lower) {
-                    spans.append(SelfCorrectionSpan(retracted: String(chars[partial.retracted]), replacement: nil))
+                    fallbackSpans.append((partial.deletion, SelfCorrectionSpan(retracted: String(chars[partial.retracted]), replacement: nil)))
                 }
             }
         }
-        guard allVerified else { return Outcome(corrected: nil, spans: spans) }
-        guard !ranges.isEmpty else { return Outcome(corrected: transcript, spans: []) }
-
-        // Non-overlapping, and the deletions must leave most of the transcript (a correction is local).
-        let sorted = ranges.sorted { $0.lowerBound < $1.lowerBound }
-        for (a, b) in zip(sorted, sorted.dropFirst()) where a.upperBound > b.lowerBound {
-            return Outcome(corrected: nil, spans: spans)
+        // Reject both sides of a conflict, independent of proposal order.
+        let accepted = ranges.indices.filter { i in
+            !uncertain.contains(where: { $0.overlaps(ranges[i]) })
+                && !ranges.indices.contains(where: { $0 != i && ranges[$0].overlaps(ranges[i]) })
         }
+        let keptSpans = accepted.map { spans[$0] }
+        let independentFallbackSpans = fallbackSpans.filter { fallback in
+            !ranges.contains(where: { $0.overlaps(fallback.range) })
+        }.map(\.span)
+        func outcome(_ corrected: String?, applied: Int) -> Outcome {
+            Outcome(corrected: corrected, spans: keptSpans + independentFallbackSpans,
+                    verifiedProposals: applied, droppedProposals: proposals.count - applied)
+        }
+        guard !accepted.isEmpty else {
+            return outcome(proposals.isEmpty ? transcript : nil, applied: 0)
+        }
+
+        // Deletions must leave most of the transcript (a correction is local).
+        let sorted = accepted.map { ranges[$0] }.sorted { $0.lowerBound < $1.lowerBound }
         let deleted = sorted.reduce(0) { $0 + $1.count }
         guard Double(deleted) <= Double(chars.count) * maximumDeletedShare else {
-            return Outcome(corrected: nil, spans: spans)
+            return outcome(nil, applied: 0)
         }
         var result = chars
         for range in sorted.reversed() { result.removeSubrange(range) }
-        let corrected = String(result).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !corrected.isEmpty else { return Outcome(corrected: nil, spans: spans) }
-        return Outcome(corrected: corrected, spans: spans)
+        var corrected = String(result).trimmingCharacters(in: .whitespacesAndNewlines)
+        // An English transcript that started with a capital keeps one after its first sentence is retracted.
+        if transcript.unicodeScalars.allSatisfy({ !$0.properties.isAlphabetic || $0.isASCII }),
+           transcript.first?.isUppercase == true, sorted.first?.lowerBound == 0, let first = corrected.first,
+           corrected.prefix(while: { !$0.isWhitespace }).allSatisfy({ !$0.isUppercase }) {
+            corrected.replaceSubrange(corrected.startIndex...corrected.startIndex, with: String(first).uppercased())
+        }
+        guard !corrected.isEmpty else { return outcome(nil, applied: 0) }
+        return outcome(corrected, applied: accepted.count)
     }
 
     /// A Japanese retraction with its own topic/subject ("昼は駅前のラーメン屋にしようかな") whose replacement has none
@@ -165,6 +199,38 @@ public enum SelfCorrection {
         return nil
     }
 
+    /// An English retraction stretched over a clause ("move the table closer to the doorway") whose replacement
+    /// is one or two words ("fireplace") is narrowed to the same number of final words ("doorway"). Whole
+    /// statements of similar length ("I'll call him" / "I'll email him") are not narrowed. Nil when in doubt.
+    private static func narrowedEnglish(_ retracted: String, replacement: String) -> String? {
+        let isEnglish: (String) -> Bool = { $0.unicodeScalars.allSatisfy { $0.isASCII } }
+        guard isEnglish(retracted), isEnglish(replacement) else { return nil }
+        let r = retracted.split(whereSeparator: \.isWhitespace)
+        let p = replacement.split(whereSeparator: \.isWhitespace)
+        let determinerSet: Set<String> = ["the", "a", "an", "to", "at", "on", "in", "by", "for", "from", "with",
+                                          "near", "this", "that", "my", "your", "our", "their", "his", "her"]
+        // The narrowed words must follow a determiner or preposition ("near the |window|"), and the replacement
+        // must not start with one; "with Priya on |Thursday|" / "with Daniel" is not narrowed.
+        if (1...2).contains(p.count), r.count >= p.count + 2,
+           determinerSet.contains(r[r.count - p.count - 1].lowercased()),
+           !determinerSet.contains(p[0].lowercased()) {
+            return r.suffix(p.count).joined(separator: " ")
+        }
+        // A longer replacement that runs on with the rest of the sentence ("fireplace the chairs can ..."):
+        // only the noun after a determiner or preposition is retracted, unless the replacement starts a new
+        // statement with a pronoun ("let's go to the park, actually we stay home" is a whole statement).
+        let determiners: Set<String> = ["the", "a", "an", "to", "at", "on", "in", "by", "for", "from", "with",
+                                        "near", "this", "that", "my", "your", "our", "their", "his", "her"]
+        let pronouns: Set<String> = ["i", "we", "you", "he", "she", "they", "it", "let's", "lets", "i'll", "we'll",
+                                     "i'm", "we're", "there", "then", "so", "and", "but"]
+        guard r.count >= 3, p.count >= 1, let first = p.first?.lowercased(),
+              determiners.contains(r[r.count - 2].lowercased()), !pronouns.contains(first),
+              !determiners.contains(first),
+              // Parallel statements repeat the retracted noun ("keep the draft" / "delete the draft").
+              !p.contains(where: { $0.lowercased() == r[r.count - 1].lowercased() }) else { return nil }
+        return String(r[r.count - 1])
+    }
+
     /// A noun followed by the topic or subject particle ("昼は", "会議が").
     private static func hasTopic(_ chars: [Character]) -> Bool {
         chars.indices.dropFirst().contains { ["は", "が"].contains(chars[$0]) && isNounStart(chars[$0 - 1]) }
@@ -192,6 +258,17 @@ public enum SelfCorrection {
     private static func locate(
         _ retracted: String, replacement: String?, requireReplacement: Bool = true, chars: [Character], lower: [Character]
     ) -> Located? {
+        if requireReplacement, let replacement {
+            let text = String(chars)
+            if let range = EnglishCuedRestart.sentenceDeletion(in: text, retracted: retracted, replacement: replacement),
+               let item = text.range(of: retracted, options: .caseInsensitive, range: range) {
+                let start = text.distance(from: text.startIndex, to: range.lowerBound)
+                let end = text.distance(from: text.startIndex, to: range.upperBound)
+                let itemStart = text.distance(from: text.startIndex, to: item.lowerBound)
+                let itemEnd = text.distance(from: text.startIndex, to: item.upperBound)
+                return Located(retracted: itemStart..<itemEnd, deletion: start..<end)
+            }
+        }
         let needle = lowered(Array(retracted))
         let replacementChars = replacement.map { lowered(Array($0)) }
         let replacementKey = replacement.map { ResultValidator.normalizeForMatch($0) } ?? ""
@@ -267,8 +344,8 @@ public enum SelfCorrection {
         return sawCue ? position : nil
     }
 
-    /// Length of the cue at `index`, or nil. With `requirePause`, Japanese cues and weak English cues need
-    /// punctuation right before or after them (a filler may sit in between: "、あ違う").
+    /// Length of the cue at `index`, or nil. The gate requires a pause or parallel Japanese wording;
+    /// weak English cues still require a pause (a filler may sit in between: "、あ違う").
     private static func cueAt(_ index: Int, chars: [Character], lower: [Character], requirePause: Bool) -> Int? {
         // "あ、" is a cue only after a pause.
         if lower[index] == "あ", index + 1 < chars.count, chars[index + 1] == "、" || chars[index + 1] == "," {
@@ -278,12 +355,20 @@ public enum SelfCorrection {
             let end = index + cue.count
             if !requirePause { return cue.count }
             let after = end < chars.count ? chars[end] : nil
-            let pauseAfter = after.map { delimiters.contains($0) || $0.isWhitespace } ?? false
+            // A Latin word or digit right after a Japanese cue sits where STT put a space (removed by
+            // JapaneseSpacing): 「stagingじゃなくてproduction」.
+            let pauseAfter = after.map { delimiters.contains($0) || $0.isWhitespace || ($0.isASCII && ($0.isLetter || $0.isNumber)) } ?? false
             if pauseAfter || pauseBefore(index, chars: chars, lower: lower) {
                 // "いやです", "違うよね" continue as a hiragana word.
                 if let after, isHiragana(after), !pauseAfter, ["いや", "いえ", "違う", "ちがう"].contains(cue) { continue }
                 return cue.count
             }
+            // The longest matching contrastive cue owns this position, including its exception.
+            let contrastive = ["じゃなくて", "ではなくて", "じゃなく", "ではなく", "でなくて", "でなく"].contains(cue)
+            let following = String(chars[end..<min(chars.count, end + 12)])
+            if contrastive && ["方が", "ほうが", "のが"].contains(where: following.contains) { return nil }
+            if parallelAroundCue(index, end: end, chars: chars) { return cue.count }
+            return nil
         }
         guard index == 0 || !isWordCharacter(lower[index - 1]) else { return nil }
         for (list, strong) in [(strongCuesEN, true), (weakCuesEN, false)] {
@@ -299,6 +384,29 @@ public enum SelfCorrection {
             }
         }
         return nil
+    }
+
+    /// Compare adjacent phrases of equal length (at most 15 characters), never across a pause.
+    private static func parallelAroundCue(_ start: Int, end: Int, chars: [Character]) -> Bool {
+        var left = start
+        while left > 0, start - left < 15,
+              !chars[left - 1].isWhitespace, !delimiters.contains(chars[left - 1]) { left -= 1 }
+        var right = end
+        while right < chars.count, right - end < 15,
+              !chars[right].isWhitespace, !delimiters.contains(chars[right]) { right += 1 }
+        let limit = min(start - left, right - end)
+        guard limit > 0 else { return false }
+        for length in 1...limit {
+            let before = Array(chars[(start - length)..<start])
+            let after = Array(chars[end..<(end + length)])
+            let prefix = zip(before, after).prefix(while: { $0 == $1 }).count
+            let suffix = zip(before.reversed(), after.reversed()).prefix(while: { $0 == $1 }).count
+            // Two shared characters at the same positions (「来週の月曜いや来週の火曜」), or a shared unit
+            // between numbers (「14枚いや19枚」); one shared character (「夏はやっぱり夏祭り」) is not enough.
+            if prefix + suffix >= 2, prefix < length { return true }
+            if suffix >= 1, before.contains(where: \.isNumber), after.contains(where: \.isNumber) { return true }
+        }
+        return false
     }
 
     private static func fillerAt(_ index: Int, chars: [Character], lower: [Character]) -> Int? {
@@ -357,7 +465,10 @@ public enum SelfCorrection {
                 let start = chars.count - word.count
                 guard matches(word, at: start, in: lower) else { continue }
                 let boundary = chars[start - 1]
-                if boundary.isWhitespace || delimiters.contains(boundary) {
+                // Japanese cues need no pause at the end of a retraction either (「午後3時やっぱり」).
+                // Correction cues need no pause at the end of a retraction (「午後3時やっぱり」); apologies do
+                // (「遅れてすみません」 is not a retraction).
+                if boundary.isWhitespace || delimiters.contains(boundary) || correctionOnlyCuesJA.contains(word) {
                     chars.removeLast(word.count)
                     changed = true
                     break

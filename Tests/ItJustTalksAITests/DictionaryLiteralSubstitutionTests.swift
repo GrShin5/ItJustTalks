@@ -29,6 +29,23 @@ struct DictionaryLiteralSubstitutionTests {
         #expect(blocked.apply(to: "アップ").text == "アップ")
     }
 
+    @Test func kanaReadingNextToASCII() {
+        let entries = [DictionaryEntry(preferred: "Nova", readings: ["ノヴァ", "ノーバ"])]
+        for (input, expected) in [("ノーバ3.1を使う", "Nova 3.1を使う"), ("ノーバ 3.1を使う", "Nova 3.1を使う"), ("v2ノーバ", "v2 Nova"), ("ノーバ３を使う", "Nova ３を使う")] {
+            #expect(substitute(input, entries: entries).text == expected)
+        }
+        #expect(substitute("ノヴァイン", entries: entries).text == "ノヴァイン")
+        #expect(substitute("Deltas", entries: [DictionaryEntry(preferred: "Delta", readings: ["Delta"])]).text == "Deltas")
+        // A preferred spelling ending in a digit is not repeated next to another digit.
+        #expect(substitute("クロード3", entries: [DictionaryEntry(preferred: "Claude 3", readings: ["クロード"])]).text == "クロード3")
+        #expect(substitute("新ノーバ3", entries: [DictionaryEntry(preferred: "NeoNova", readings: ["新ノーバ"])]).text == "NeoNova 3")
+        // Latin letters next to the reading still block it.
+        #expect(substitute("ノーバapp", entries: entries).text == "ノーバapp")
+        #expect(substitute("xノーバ", entries: entries).text == "xノーバ")
+        // Two-character readings stay ineligible, even next to digits.
+        #expect(substitute("ノバ3.1", entries: [DictionaryEntry(preferred: "Nova", readings: ["ノバ"])]).text == "ノバ3.1")
+    }
+
     @Test func eligibilityCountsGraphemesWithoutWhitespace() {
         for reading in ["A B", " A\tB ", "ガ\nギ".decomposedStringWithCanonicalMapping] {
             #expect(substitute(reading, entries: [DictionaryEntry(preferred: "Word", readings: [reading])]).count == 0)

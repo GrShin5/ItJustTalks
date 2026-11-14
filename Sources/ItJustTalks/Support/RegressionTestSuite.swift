@@ -983,7 +983,7 @@ enum RegressionTestSuite {
                     result: .inserted
                 )
             }
-                && !NormalInputHistoryPolicy.shouldStoreText(
+                && NormalInputHistoryPolicy.shouldStoreText(
                     historyEnabled: true,
                     cleanupEnabled: true,
                     cleanupDidFail: true,
@@ -2223,7 +2223,7 @@ enum RegressionTestSuite {
                 "通常モードの起動キー設定",
                 "AIに指示モードの起動キー設定",
                 "ハンズフリー送信モード",
-                "AIに指示モードの入力履歴",
+                "AIに指示モードの出力履歴",
                 "通常モードまたはハンズフリー送信モードですでに使われている起動キーです。別のキーを選んでください。",
                 "AIに指示モードの起動キーが修飾キーだけの組み合わせのため、追加キーを判別できません。起動キーに通常キー（Spaceなど）を含めてください。"
             ]
@@ -2909,7 +2909,7 @@ enum RegressionTestSuite {
             "settings redline copy is fully localized, retains both extra-key tokens, and does not promise unavailable recovery"
         )
         let onboardingHandsFreeGuidanceKey = "%@ で開始し、発話の最後に「%@」と言うか、もう一度 %@ を押すと録音を終了します。本文を安全に挿入でき、送信が許可されている場合だけ、設定した送信キー（%@）を自動送信します。送信できた後は取り消せません。送信キー、カスタムフレーズ、外部アプリでの自動送信は設定で変更できます。"
-        let onboardingClipboardGuidanceKey = "Google Docsなど一部のアプリやWebサイトでは、選択したテキストをItJustTalksが認識できない場合があります。そうしたアプリ等では、このモードを使い、自分で ⌘C でコピーしたテキストに対してAIに編集指示や質問ができます。\n\n現在の追加キー（%@）を最初に押しながら、「AIに指示モード」で設定した起動キーを押してください。\n\n安全な入力が有効な間、秘匿指定・ItJustTalks自身の出力・テキスト以外・長すぎる内容はAIへ渡さず中止します。ItJustTalksが読めない場合に一般質問へ切り替えることはありません。クリップボード本文は履歴に保存せず、音声指示だけをAIに指示モードの履歴に保存します。追加キーは設定画面で変更できます。"
+        let onboardingClipboardGuidanceKey = "Google Docsなど一部のアプリやWebサイトでは、選択したテキストをItJustTalksが認識できない場合があります。そうしたアプリ等では、このモードを使い、自分で ⌘C でコピーしたテキストに対してAIに編集指示や質問ができます。\n\n現在の追加キー（%@）を最初に押しながら、「AIに指示モード」で設定した起動キーを押してください。\n\n安全な入力が有効な間、秘匿指定・ItJustTalks自身の出力・テキスト以外・長すぎる内容はAIへ渡さず中止します。ItJustTalksが読めない場合に一般質問へ切り替えることはありません。元のクリップボード本文や音声指示は保存せず、出力本文だけをAIに指示モードの履歴に保存します。追加キーは設定画面で変更できます。"
         let onboardingRedlineJapaneseKeys = [
             "話すだけで、普段のタイピング入力がすばやく進められます。まずは3つのモードの使い方を分けて確認しましょう。",
             "通常モードと同じ文字起こし・AI整形を使います。音声トリガーまたはもう一度起動キーを押すと録音を終了します。本文を安全に挿入でき、送信が許可されている場合だけ、設定した送信キーを自動送信します。送信できた後は取り消せません。",
@@ -4812,39 +4812,18 @@ enum RegressionTestSuite {
         let snapshot = historyStore.metadataOnlyIDs
         let later = metadataOnlyEntry()
         historyStore.append(later, retentionDays: 0)
-        let commandEntry = InputHistoryEntry.aiCommandTranscript("日本語で要約して。")
-        historyStore.append(commandEntry, retentionDays: 0)
+        historyStore.recordOutput(mode: InputHistoryMode.aiCommand, output: "合成の回答",
+            kind: InputHistoryStoredTextKind.aiCommandOutput, status: InputHistoryInsertStatus.shownInWindow,
+            sourceLabel: .clipboard, startHistoryEnabled: true, currentHistoryEnabled: true, retentionDays: 0)
         historyStore.delete(ids: snapshot)
         expect(!historyStore.entries.contains(where: { $0.id == first.id }), "metadata snapshot deletes original entry")
         expect(historyStore.entries.contains(where: { $0.id == later.id }), "metadata snapshot preserves later entry")
-        expect(
-            historyStore.visibleEntries(limit: 0, mode: InputHistoryMode.aiCommand) == [commandEntry],
-            "M5 history filter contains only spoken transcript"
-        )
-        expect(
-            commandEntry.storedTextKind == InputHistoryStoredTextKind.aiCommandTranscript
-                && commandEntry.insertStatus == InputHistoryInsertStatus.notApplicable,
-            "M5 history excludes answer and insertion data"
-        )
-        let clipboardCommandEntry = InputHistoryEntry.aiCommandTranscript(
-            "この段落を英語にして",
-            inputSource: .clipboard
-        )
-        historyStore.append(clipboardCommandEntry, retentionDays: 0)
-        let clipboardHistoryJSON = (try? JSONEncoder().encode(clipboardCommandEntry))
-            .flatMap { String(data: $0, encoding: .utf8) } ?? ""
-        expect(
-            clipboardCommandEntry.mode == InputHistoryMode.aiCommand
-                && clipboardCommandEntry.aiCommandInputSource == .clipboard
-                && clipboardCommandEntry.storedText == "この段落を英語にして"
-                && clipboardHistoryJSON.contains("aiCommandInputSource")
-                && clipboardHistoryJSON.contains("clipboard")
-                && !clipboardHistoryJSON.contains("selectedText")
-                && !clipboardHistoryJSON.contains("clipboardText")
-                && !clipboardHistoryJSON.contains("answer")
-                && !clipboardHistoryJSON.contains("sources"),
-            "clipboard AI command history stores only the spoken instruction and a source label"
-        )
+        let commandEntry = historyStore.visibleEntries(limit: 0, mode: InputHistoryMode.aiCommand).first
+        expect(commandEntry?.storedText == "合成の回答"
+            && commandEntry?.storedTextKind == InputHistoryStoredTextKind.aiCommandOutput
+            && commandEntry?.insertStatus == InputHistoryInsertStatus.shownInWindow
+            && commandEntry?.aiCommandInputSource == .clipboard,
+            "AI command history stores output and source label, never the spoken instruction")
         let legacyAIHistoryEntry = InputHistoryEntry.aiCommandTranscript("既存の音声指示")
         let legacyAIHistoryData = try! JSONEncoder().encode(legacyAIHistoryEntry)
         var legacyAIHistoryObject = try! JSONSerialization.jsonObject(

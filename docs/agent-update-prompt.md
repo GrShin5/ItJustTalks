@@ -5,7 +5,7 @@
 英語版は[agent-update-prompt.en.md](agent-update-prompt.en.md)です（内容は同じ）。
 
 ```text
-このMacのItJustTalksを0.1.1へ、同じ署名を保ってソースから更新してください。
+このMacのItJustTalksを0.2.0へ、同じ署名を保ってソースから更新してください。
 取得元: https://github.com/GrShin5/ItJustTalks
 
 守ること:

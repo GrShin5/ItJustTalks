@@ -35,7 +35,7 @@ LOG_HYGIENE|Sources/ItJustTalks/ItJustTalksApp.swift|7e70d6a95e1c7bf5206a5fa5822
 LOG_HYGIENE|Sources/ItJustTalks/ItJustTalksApp.swift|7f9bccca9b4ba46a5de2cfa76da07a5d11f9109b35a9ad0d37bd605efcd07afa|1|Random per-recording UUID and recording-mode enum only; no user or device identifier.
 LOG_HYGIENE|Sources/ItJustTalks/ItJustTalksApp.swift|8c2120c30eea7c4873cb59f8e94e31b39c05ca2007e92952ea211e799676d936|1|Hotkey numeric key code, modifier flag and recording-mode enum only.
 LOG_HYGIENE|Sources/ItJustTalks/ItJustTalksApp.swift|90753e01c3dd06025665d07ad14cfbf4bea86a8c58f014e869da731cc9cdb6a5|1|Random per-session/stream UUID used only for diagnostic correlation; no account/device identity.
-LOG_HYGIENE|Sources/ItJustTalks/ItJustTalksApp.swift|982ca03db48f92e90ea039f71ecbfe06f393b408295b8c31b03adf3077cb9f20|1|Insertion-result helper maps cases to fixed status labels and error type only; never body.
+LOG_HYGIENE|Sources/ItJustTalks/ItJustTalksApp.swift|d0d94c71a885fc9e5a463977b5c6220b83bfef6817ec5663204344197231acab|1|Insertion-result helper maps cases to fixed status labels and error type only; never body.
 LOG_HYGIENE|Sources/ItJustTalks/ItJustTalksApp.swift|98e1df2fbe5b2f107f3be93585bde864db6bdd7af1ed1eda9148b14fa09591f3|1|Support command returns only fixed enabled/disabled status literals; no user body.
 LOG_HYGIENE|Sources/ItJustTalks/ItJustTalksApp.swift|9ce0eb43b7a6a43b4dc15922bb457e3cdf15ddfb25639f1d29876b838095d028|1|Elapsed seconds, failure enum rawValue and a Boolean-selected fixed literal; no transcript text.
 LOG_HYGIENE|Sources/ItJustTalks/ItJustTalksApp.swift|bc6efba412dc6d6cc6ad1b37dc105fc29a900cc35077979b3426a27a0c74b75b|1|Completion count, numeric latency/none and fixed insertion-result label only.

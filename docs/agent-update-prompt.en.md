@@ -5,7 +5,7 @@ Paste the entire code block below into an AI coding agent. The agent checks the 
 The [Japanese version](agent-update-prompt.md) has the same content.
 
 ```text
-Update ItJustTalks on this Mac to 0.1.1 from source, keeping the same signature.
+Update ItJustTalks on this Mac to 0.2.0 from source, keeping the same signature.
 Source: https://github.com/GrShin5/ItJustTalks
 
 Rules:

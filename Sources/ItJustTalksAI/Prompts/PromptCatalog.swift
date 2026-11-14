@@ -72,8 +72,9 @@ public enum PromptCatalog {
         // v3 (cleanup): dictionary entries are applied to heard-as / same-sounding words; memo is reference only.
         // v5 (cleanup; v4 was a reverted 2026-10-15 experiment): keep every word except fillers / retractions,
         // no full stop after a single word or short phrase, emphatic やっぱり is not a correction.
+        // v6: concise dictionary rule and punctuation / unfinished-utterance examples.
         case .cleanup:
-            return 5
+            return 6
         // v2 also has a prompt-side retry section requesting fewer/shorter items; protect it from leakage.
         case .instructionOptimizer:
             return 2

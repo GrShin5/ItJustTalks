@@ -812,8 +812,8 @@ struct OnboardingView: View {
                     .font(uiMetrics.font(.caption))
                     .foregroundStyle(.secondary)
 
-                retentionPicker(title: "AIに指示モードの入力履歴", enabled: aiHistoryEnabled, days: aiHistoryDays)
-                Text(uiText("保存されるのは音声指示内容の文字起こしだけです。クリップボードモードも同じAIに指示モードの履歴に「クリップボードモード」として表示します。選択元、クリップボード本文、AIの回答、音声、参照リンクなどは保存されません。通常モードと同じ履歴ファイルにモード別で保存されます。"))
+                retentionPicker(title: "AIに指示モードの出力履歴", enabled: aiHistoryEnabled, days: aiHistoryDays)
+                Text(uiText("保存されるのは挿入または結果ウィンドウに表示した出力本文だけです。クリップボードモードも同じAIに指示モードの履歴に「クリップボードモード」として表示します。元の選択文章、元のクリップボード本文、音声指示、音声は保存されません。通常モードと同じ履歴ファイルにモード別で保存されます。"))
                     .font(uiMetrics.font(.caption))
                     .foregroundStyle(.secondary)
                 Text(uiFormat("保存先: %@", OnboardingRuntimeProfile.historyFileDisplayPath))
@@ -871,7 +871,7 @@ struct OnboardingView: View {
                         Divider()
                         Toggle(uiText("クリップボードモードを有効にする"), isOn: clipboardVariantEnabledBinding)
                         Text(uiFormat(
-                            "Google Docsなど一部のアプリやWebサイトでは、選択したテキストをItJustTalksが認識できない場合があります。そうしたアプリ等では、このモードを使い、自分で ⌘C でコピーしたテキストに対してAIに編集指示や質問ができます。\n\n現在の追加キー（%@）を最初に押しながら、「AIに指示モード」で設定した起動キーを押してください。\n\n安全な入力が有効な間、秘匿指定・ItJustTalks自身の出力・テキスト以外・長すぎる内容はAIへ渡さず中止します。ItJustTalksが読めない場合に一般質問へ切り替えることはありません。クリップボード本文は履歴に保存せず、音声指示だけをAIに指示モードの履歴に保存します。追加キーは設定画面で変更できます。",
+                            "Google Docsなど一部のアプリやWebサイトでは、選択したテキストをItJustTalksが認識できない場合があります。そうしたアプリ等では、このモードを使い、自分で ⌘C でコピーしたテキストに対してAIに編集指示や質問ができます。\n\n現在の追加キー（%@）を最初に押しながら、「AIに指示モード」で設定した起動キーを押してください。\n\n安全な入力が有効な間、秘匿指定・ItJustTalks自身の出力・テキスト以外・長すぎる内容はAIへ渡さず中止します。ItJustTalksが読めない場合に一般質問へ切り替えることはありません。元のクリップボード本文や音声指示は保存せず、出力本文だけをAIに指示モードの履歴に保存します。追加キーは設定画面で変更できます。",
                             settingsStore.settings.aiCommandSettings.clipboardVariantModifier.displayLabel
                         ))
                             .font(uiMetrics.font(.caption))

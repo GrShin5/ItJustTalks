@@ -1,6 +1,7 @@
 import Foundation
 
 enum InputHistoryFlag {
+    static let needsReview = "needs_review"
     static let cleanupFailed = "cleanup_failed"
     static let insertFailed = "insert_failed"
     static let secureInputBlocked = "secure_input_blocked"
@@ -11,6 +12,8 @@ enum InputHistoryFlag {
 }
 
 enum InputHistoryStoredTextKind {
+    static let aiCommandOutput = "ai_command_output"
+    static let reviewText = "review_text"
     static let aiAssistedOutput = "ai_assisted_output"
     static let rawTranscriptOutput = "raw_transcript_output"
     static let aiCommandTranscript = "ai_command_transcript"
@@ -25,6 +28,7 @@ enum InputHistoryMode {
 }
 
 enum InputHistoryInsertStatus {
+    static let shownInWindow = "shown_in_window"
     static let inserted = "inserted"
     static let pasteSentUnverified = "paste_sent_unverified"
     static let secureInputBlocked = "secure_input_blocked"
@@ -47,8 +51,7 @@ struct InputHistoryEntry: Codable, Identifiable, Equatable {
     var modelSlug: String?
     var reasoningEffort: String?
     var latencyMs: Int?
-    /// AIに指示の入力元。値を持つ場合でも保存するのは経路ラベルだけで、
-    /// 選択本文・クリップボード本文・回答・URL・音声は保存しない。
+    /// Source label only; original selection and clipboard bodies are never stored.
     var aiCommandInputSource: AICommandInputSource?
     var schemaVersion: Int
 
@@ -88,8 +91,7 @@ struct InputHistoryEntry: Codable, Identifiable, Equatable {
         flags.contains(InputHistoryFlag.excludedByUser)
     }
 
-    /// 「AIに指示」の履歴は音声指示の確定文字起こしだけを保持する。
-    /// 選択元・回答・URL・音声をこのAPIへ渡せない形にして保存境界を狭める。
+    /// Legacy instruction entry factory retained for decoding fixtures and compatibility.
     static func aiCommandTranscript(
         _ transcript: String,
         createdAt: Date = Date(),
@@ -116,7 +118,8 @@ struct InputHistoryEntry: Codable, Identifiable, Equatable {
 
     var isValidForStorage: Bool {
         guard mode == InputHistoryMode.aiCommand else { return true }
-        guard storedTextKind == InputHistoryStoredTextKind.aiCommandTranscript,
+        guard [InputHistoryStoredTextKind.aiCommandTranscript, InputHistoryStoredTextKind.aiCommandOutput,
+               InputHistoryStoredTextKind.reviewText].contains(storedTextKind),
               let storedText else { return false }
         return !storedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }

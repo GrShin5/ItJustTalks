@@ -101,6 +101,14 @@ public struct DictionarySelection: Sendable, Hashable {
     public var totalTokens: Int
 
     public var hints: [DictionaryHint] { selected.map(\.hint) }
+
+    /// Re-select after substitution so resolved spellings are not repeated as hints.
+    /// Retain the selected hint verbatim, including its optional memo.
+    public func unresolvedHints(in text: String) -> [DictionaryHint] {
+        // Any selected entry whose spelling is not already in the text stays a hint (readings shorter than
+        // the literal threshold, entries without readings, sound matches).
+        selected.map(\.hint).filter { !text.contains($0.preferred) }
+    }
 }
 
 /// Chooses which dictionary entries are handed to the model for one request (§5.3). Pure; no logging.

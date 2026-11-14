@@ -5,7 +5,7 @@
 英語版は[agent-install-prompt.en.md](agent-install-prompt.en.md)です（内容は同じ）。
 
 ```text
-このMacへItJustTalks 0.1.1をソースからビルド・自己署名して新規導入してください。
+このMacへItJustTalks 0.2.0をソースからビルド・自己署名して新規導入してください。
 取得元: https://github.com/GrShin5/ItJustTalks
 
 守ること:
@@ -17,7 +17,7 @@
 - エラー時はそこで止め、原因と必要な次の操作を説明してください。署名や識別子の不一致を迂回しないでください。アプリ起動や録音・文章入力の確認はユーザーに任せてください。
 
 macOS 27以上、AI機能にはApple silicon、Apple Intelligenceの有効化、モデル準備、MacとSiriの言語の一致が必要です。Command Line Tools（コマンドで開発するためのApple製ツール。Gitを含む）だけで導入できます。フルXcodeは不要です（Xcode 27も使用可）。Homebrew・OpenSSL 3の追加導入も不要です。/Applicationsへ書き込めるアカウント（通常は管理者）と2 GBの空き容量が必要です。
-0.1.0はApple M1 MacBook Air（メモリ8 GB、macOS 27.2、フルXcode 27.2）で導入済みです。0.1.1はCommand Line Toolsだけで、Apple M5 Maxでのビルドと、Apple M1 MacBook Air（macOS 27.2）での新規導入を確認済みです。OpenSSL 3がないMacでの導入は未確認です。Core 3搭載Macは未確認です。
+0.1.0はApple M1 MacBook Air（メモリ8 GB、macOS 27.2、フルXcode 27.2）で導入済みです。0.1.1はCommand Line Toolsだけで、Apple M5 Maxでのビルドと、Apple M1 MacBook Air（macOS 27.2）での新規導入を確認済みです。0.2.0はApple M5 Max（メモリ64 GB）でソースからビルドし、自動テストに合格しました。0.2.0は他のMacでは未確認です。OpenSSL 3がないMacでの導入は未確認です。Core 3搭載Macは未確認です。
 
 手順:
 1. まず読取りだけでmacOSの版、Command Line Toolsの有無、~/Developer/ItJustTalksがDesktop・Documents・iCloud Drive・File Provider配下でないこと、/Applications/ItJustTalks.appの有無を確認してください。

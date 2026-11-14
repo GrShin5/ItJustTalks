@@ -4,6 +4,22 @@ import Testing
 
 @Suite("DictionarySelector")
 struct DictionarySelectorTests {
+    @Test func resolvedLiteralEntriesAreNotSoundHints() {
+        let entries = [DictionaryEntry(preferred: "ExampleTool", readings: ["エグザンプルツール"], memo: "reference")]
+        let selection = selector.select(entries: entries, text: "エグザンプルツールを使う", options: roomy)
+        let body = DictionaryLiteralSubstitution(selection: selection, entries: entries).apply(to: "エグザンプルツールを使う").text
+        #expect(body == "ExampleToolを使う")
+        #expect(selector.select(entries: entries, text: body, options: roomy).unresolvedHints(in: body).isEmpty)
+        let hint = DictionaryHint(preferred: "ExampleTool", readings: ["example"], memo: "reference")
+        let unresolved = DictionarySelection(selected: [SelectedDictionaryEntry(entryIndex: 0, hint: hint,
+            matchKind: .phonetic, matchLength: 7, tokens: 1)], matchedCount: 1, omittedCount: 0, totalTokens: 1)
+        #expect(unresolved.unresolvedHints(in: "exampleを使う") == [hint])
+        // Entries the literal pass cannot resolve (no reading, short reading) stay hints.
+        let short = [DictionaryEntry(preferred: "GitHub", readings: [], memo: nil), DictionaryEntry(preferred: "AB社", readings: ["えーび"], memo: nil)]
+        let mixed = selector.select(entries: short, text: "githubとえーびの件", options: roomy)
+        #expect(Set(mixed.unresolvedHints(in: "githubとえーびの件").map(\.preferred)) == Set(mixed.hints.map(\.preferred)))
+    }
+
     /// 1 token per character: deterministic and easy to reason about.
     let selector = DictionarySelector(tokenCounter: { $0.count })
     let roomy = DictionarySelectionOptions(maxItems: 8, tokenBudget: 10_000, includeMemo: false)

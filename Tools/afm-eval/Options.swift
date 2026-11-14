@@ -48,6 +48,7 @@ enum PromptLanguageChoice: String, Sendable, Codable {
 struct RunOptions: Sendable {
     var contextLimit: Int?
     var chunkContext: ChunkContextChoice = .none
+    var projection: CleanupPipeline.EditProjectionMode = .projected
     var casesDirectory: URL
     var outDirectory: URL
     var categories: [EvalCategory] = EvalCategory.allCases
@@ -98,7 +99,7 @@ enum OptionParser {
       afm-eval --cases <Evaluation/cases dir> --out <dir> [--category cleanup|routing|generation|optimization|long|all]
                [--prompt-lang auto|ja|en] [--guardrails auto|default|permissive] [--command-method separated|unified]
                [--correction-method spans|sentence|off] [--generation-path oracle|e2e]
-               [--context-limit N (>=1024)] [--chunk-context none|previous-sentence]
+               [--context-limit N (>=1024)] [--chunk-context none|previous-sentence] [--projection off|projected]
                [--dictionary-memo on|off] [--repeat N] [--limit N] [--fake]
       afm-eval rescore --records-dir <old run dir> --cases <cases dir> --out <new dir> [--category all|category] [--repeat N]
       afm-eval cancel-test --count N --cancel-after-ms M --out <dir> [--prompt-lang ja|en] [--fake]
@@ -179,6 +180,9 @@ enum OptionParser {
             case "--context-limit":
                 guard let number = Int(try value(flag)), number >= 1024 else { throw OptionError.message("invalid --context-limit") }
                 options.contextLimit = number
+            case "--projection":
+                guard let choice = CleanupPipeline.EditProjectionMode(rawValue: try value(flag)) else { throw OptionError.message("invalid --projection") }
+                options.projection = choice
             case "--chunk-context":
                 guard let choice = ChunkContextChoice(rawValue: try value(flag)) else { throw OptionError.message("invalid --chunk-context") }
                 options.chunkContext = choice

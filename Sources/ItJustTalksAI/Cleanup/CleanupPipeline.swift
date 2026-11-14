@@ -171,20 +171,32 @@ public final class CleanupPipeline: @unchecked Sendable {
         /// Evaluation knob: force one guardrail mode instead of the per-task decision (`AITask.guardrails`).
         public var guardrailsOverride: GuardrailsMode?
         public var chunkReferenceContext: ChunkReferenceContext
+        /// How the cleanup output is used for plain normal dictation (no style preferences, no
+        /// translation, not hands-free): `.projected` keeps every spoken word and takes only the allowed
+        /// edits (punctuation, fillers, restarts, dictionary spellings) from the model; `.off` is the
+        /// previous free rewrite. The app enables `.projected` (`CleanupPipeline.product`).
+        public var editProjection: EditProjectionMode
 
         public init(
             budgeter: ContextBudgeter = ContextBudgeter(),
             validator: ResultValidator = ResultValidator(),
             includeDictionaryMemo: Bool = true,
             guardrailsOverride: GuardrailsMode? = nil,
-            chunkReferenceContext: ChunkReferenceContext = .none
+            chunkReferenceContext: ChunkReferenceContext = .none,
+            editProjection: EditProjectionMode = .off
         ) {
             self.budgeter = budgeter
             self.validator = validator
             self.includeDictionaryMemo = includeDictionaryMemo
             self.guardrailsOverride = guardrailsOverride
             self.chunkReferenceContext = chunkReferenceContext
+            self.editProjection = editProjection
         }
+    }
+
+    public enum EditProjectionMode: String, Sendable, Hashable, CaseIterable {
+        case off
+        case projected
     }
 
     public let configuration: Configuration
@@ -197,20 +209,111 @@ public final class CleanupPipeline: @unchecked Sendable {
         self.configuration = configuration
     }
 
+    /// The configuration the app uses for dictation.
+    public static func product() -> CleanupPipeline {
+        CleanupPipeline(configuration: Configuration(editProjection: .projected))
+    }
+
     // MARK: - Entry points
 
     /// Stage A then the cleanup stage.
     public func run(_ input: CleanupInput, using executor: some GenerationExecuting,
                     progress: (@Sendable (ChunkProgress) -> Void)? = nil) async -> CleanupResult {
         let result = await runCollapsed(input, using: executor, progress: progress)
-        return await retryDistinctSpeechActs(preservingOriginalFidelity(result, input: input), input: input, using: executor)
+        let final = projectedSafeText(
+            await retryDistinctSpeechActs(preservingOriginalFidelity(result, input: input), input: input, using: executor),
+            input: input
+        )
+        return final
+    }
+
+    /// Deterministic restart removal before generation: cue-less repeats everywhere, obvious cued
+    /// restarts (「14枚いや19枚」) only for plain dictation with edit projection. Idempotent.
+    func collapsingRestarts(_ input: CleanupInput) -> String {
+        let collapsed = RestartCollapser.collapse(input.transcript)
+        return projects(input) ? Self.projectedPreprocessing(collapsed, language: input.promptLanguage) : collapsed
+    }
+
+    /// Deterministic steps before the model on the projected path. Idempotent: the transcript passes
+    /// through here more than once.
+    static func projectedPreprocessing(_ text: String, language: PromptLanguage) -> String {
+        switch language {
+        case .ja: return PauseMarkRepair.repair(CuedRestart.collapse(JapaneseSpacing.normalize(text)))
+        case .en: return EnglishCuedRestart.collapse(text)
+        }
+    }
+
+    /// English plain dictation uses the word-level projector (case changes, fillers, no rewording).
+    /// Set to false to return English to the previous rewrite path.
+    static let projectsEnglish = true
+
+    /// Plain normal dictation eligible for edit projection.
+    func projects(_ input: CleanupInput) -> Bool {
+        configuration.editProjection == .projected && !input.handsFree
+            && (input.promptLanguage == .ja || (input.promptLanguage == .en && Self.projectsEnglish))
+            && (input.customInstruction?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+            && !ResultValidator.isCrossLanguage(source: input.transcript, expected: input.outputLanguage?.code)
+    }
+
+    /// Entries the selector found in this text, with their normalized readings.
+    private func projectionDictionary(_ input: CleanupInput, text: String) -> [(surface: String, readings: [String])] {
+        let selection = selector.select(entries: input.dictionaryEntries, text: text,
+            options: DictionarySelectionOptions(includeMemo: false, promptLanguage: input.promptLanguage))
+        return selection.selected.compactMap { selected in
+            guard input.dictionaryEntries.indices.contains(selected.entryIndex) else { return nil }
+            let entry = input.dictionaryEntries[selected.entryIndex]
+            guard entry.isEnabled else { return nil }
+            return (surface: entry.preferred, readings: DictionaryEntry.normalizedReadings(entry.readings))
+        }
+    }
+
+    /// A projected result the checks still question is not shown for review: the spoken words are
+    /// inserted as they were, with only punctuation, fillers and dictionary spellings taken from the
+    /// model (nothing is deleted or reworded, so nothing can be lost).
+    private func projectedSafeText(_ result: CleanupResult, input: CleanupInput) -> CleanupResult {
+        guard projects(input), let output = result.text else { return result }
+        switch result.status {
+        case .complete, .failed(.cancelled): return result
+        case .needsReview, .failed(.validationFailed): break
+        case .failed: return result
+        }
+        // Only a leftover restart was flagged: the projected text already keeps every other word, and the
+        // safe text would keep the restart too, so the projected text is the better of the two.
+        let reasons = result.diagnostics.validation?.outcome.reasons ?? []
+        if case .needsReview = result.status, !reasons.isEmpty, reasons.allSatisfy({ $0 == .selfCorrectionKept }) {
+            var result = result
+            result.status = .complete
+            result.diagnostics.measures["projection.keptRestartAccepted"] = 1
+            return result
+        }
+        let source = deterministicFallbackText(for: input)
+        // Very long text: the character diff is quadratic; keep the unformatted fallback path instead.
+        guard source.count <= 4000 else { return result }
+        let safe = EditProjector.project(.init(
+            source: source, output: output, language: input.promptLanguage.rawValue,
+            dictionary: projectionDictionary(input, text: source), allowsContentDeletions: false
+        ))
+        guard !safe.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return result }
+        // An unrelated proposal (a refusal or an answer) gives no formatting: keep the "unformatted"
+        // failure so the app inserts the fallback text with its notice instead of a review window.
+        if safe.fellBack {
+            var result = result
+            result.status = .failed(.validationFailed)
+            result.diagnostics.measures["projection.unformatted"] = 1
+            return result
+        }
+        var result = result
+        result.text = input.promptLanguage == .en ? EnglishCapitalization.apply(safe.text) : safe.text
+        result.status = .complete
+        result.diagnostics.measures["projection.safeText"] = 1
+        return result
     }
 
     private func runCollapsed(_ input: CleanupInput, using executor: some GenerationExecuting,
                               progress: (@Sendable (ChunkProgress) -> Void)?) async -> CleanupResult {
         // Request-local copy for generation; retain the original for the final fidelity checks.
         var input = input
-        input.transcript = RestartCollapser.collapse(input.transcript)
+        input.transcript = collapsingRestarts(input)
         let preflight = await chunkBudget(input, reference: nil, using: executor)
         switch preflight {
         case .needsChunking(let target, _):
@@ -248,7 +351,7 @@ public final class CleanupPipeline: @unchecked Sendable {
     public func selfCorrectionStage(_ input: CleanupInput, using executor: some GenerationExecuting) async -> SelfCorrectionStageResult {
         // Public stage entry points apply the same idempotent pre-pass as `run` (afm-eval calls them directly).
         var input = input
-        input.transcript = RestartCollapser.collapse(input.transcript)
+        input.transcript = collapsingRestarts(input)
         var result = SelfCorrectionStageResult.notRun(transcript: input.transcript)
         guard SelfCorrection.hasCue(in: input.transcript) else { return result }
         result.measures["stageA.ran"] = 1
@@ -291,6 +394,8 @@ public final class CleanupPipeline: @unchecked Sendable {
         result.measures["stageA.proposals"] = Double(proposals.count)
         let outcome = SelfCorrection.apply(proposals.map { ($0.retracted, $0.replacement) }, to: input.transcript)
         result.spans = outcome.spans
+        result.measures["stageA.verifiedProposals"] = Double(outcome.verifiedProposals)
+        result.measures["stageA.droppedProposals"] = Double(outcome.droppedProposals)
         if let corrected = outcome.corrected {
             result.transcriptForCleanup = corrected
             result.measures["stageA.applied"] = corrected == input.transcript ? 0 : 1
@@ -308,9 +413,13 @@ public final class CleanupPipeline: @unchecked Sendable {
         using executor: some GenerationExecuting
     ) async -> CleanupResult {
         var collapsed = input
-        collapsed.transcript = RestartCollapser.collapse(input.transcript)
+        collapsed.transcript = collapsingRestarts(input)
         let result = await cleanupStage(collapsed, after: stageA, reference: nil, allowChunking: true, using: executor)
-        return await retryDistinctSpeechActs(preservingOriginalFidelity(result, input: input), input: input, using: executor)
+        let final = projectedSafeText(
+            await retryDistinctSpeechActs(preservingOriginalFidelity(result, input: input), input: input, using: executor),
+            input: input
+        )
+        return final
     }
 
     /// One bounded recovery round, using the same executor (and therefore the same deadline).
@@ -509,18 +618,22 @@ public final class CleanupPipeline: @unchecked Sendable {
         )
         let substituted = substitution.apply(to: stageA.transcriptForCleanup)
         let transcript = substituted.text
+        let unresolvedHints = selector.select(
+            entries: input.dictionaryEntries, text: transcript,
+            options: DictionarySelectionOptions(includeMemo: configuration.includeDictionaryMemo, promptLanguage: language)
+        ).unresolvedHints(in: transcript)
         diagnostics.measures["dictionary.substitutions"] = Double(substituted.count)
         diagnostics.dictionarySelected = selection.selected.count
         diagnostics.dictionaryOmitted = selection.omittedCount
         let prompt = PromptAssembler.cleanupPrompt(
-            transcript: transcript, dictionaryHints: selection.hints, stylePreferences: input.customInstruction,
+            transcript: transcript, dictionaryHints: unresolvedHints, stylePreferences: input.customInstruction,
             outputLanguage: input.outputLanguage, language: language, referenceContext: reference
         )
 
         let budget = await budget(
             task: .cleanup, instructions: template.text, prompt: prompt, body: transcript,
             promptWithoutCustomInstruction: input.customInstruction == nil ? nil : PromptAssembler.cleanupPrompt(
-                transcript: transcript, dictionaryHints: selection.hints, stylePreferences: nil,
+                transcript: transcript, dictionaryHints: unresolvedHints, stylePreferences: nil,
                 outputLanguage: input.outputLanguage, language: language, referenceContext: reference
             ), executor: executor
         )
@@ -570,12 +683,29 @@ public final class CleanupPipeline: @unchecked Sendable {
         // Hands-free: an entry found only by sound may be a homophone ("今度" for "近藤"), so its spelling
         // is never sent automatically; it is shown for review instead.
         let terms = DictionaryValidationTerms(selection, handsFree: input.handsFree)
-        let output = Self.strippingShortPhraseFullStop(
+        var output = Self.strippingShortPhraseFullStop(
             FillerStripper.strip(Self.trimmingTrailingLineWhitespace(outputSubstitution.apply(to: generated.text).text), source: input.transcript), transcript: input.transcript
         )
+        // Projection: the model's text is a proposal. Only allowed edits reach the spoken words, so a
+        // shortened or truncated proposal keeps the source text instead of losing it.
+        var projectedTail = false
+        if reference == nil, projects(input) {
+            let projection = EditProjector.project(.init(
+                source: transcript, output: output, language: language.rawValue,
+                dictionary: projectionDictionary(input, text: stageA.transcriptForCleanup)
+            ))
+            // A proposal may put back a mid-utterance 「。」.
+            output = language == .ja ? PauseMarkRepair.repair(projection.text) : EnglishCapitalization.apply(projection.text)
+            projectedTail = !projection.fellBack
+            diagnostics.measures["projection.applied"] = 1
+            diagnostics.measures["projection.fellBack"] = projection.fellBack ? 1 : 0
+            diagnostics.measures["projection.alignment"] = projection.alignment
+            diagnostics.measures["projection.accepted"] = Double(projection.accepted.values.reduce(0, +))
+            diagnostics.measures["projection.rejected"] = Double(projection.rejected.values.reduce(0, +))
+        }
         let validationInput = ValidationInput(
             task: .cleanup, source: substitution.apply(to: input.transcript, includeSound: false).text,
-            output: ChunkPlanner.bodyAfterReference(reference, output: output), isTruncated: generated.isTruncated,
+            output: ChunkPlanner.bodyAfterReference(reference, output: output), isTruncated: generated.isTruncated && !projectedTail,
             protectedInstructions: [template.text],
             userSuppliedTexts: [],
             allowedNewTerms: terms.allowedNewTerms,
@@ -602,13 +732,15 @@ public final class CleanupPipeline: @unchecked Sendable {
         let selection = selector.select(entries: input.dictionaryEntries, text: input.transcript,
             options: DictionarySelectionOptions(includeMemo: configuration.includeDictionaryMemo, promptLanguage: input.promptLanguage))
         let body = DictionaryLiteralSubstitution(selection: selection, entries: input.dictionaryEntries).apply(to: input.transcript).text
+        let unresolvedHints = selector.select(entries: input.dictionaryEntries, text: body,
+            options: DictionarySelectionOptions(includeMemo: configuration.includeDictionaryMemo, promptLanguage: input.promptLanguage)).unresolvedHints(in: body)
         let template = PromptCatalog.template(.cleanup, language: input.promptLanguage)
         return await budget(task: .cleanup, instructions: template.text,
-            prompt: PromptAssembler.cleanupPrompt(transcript: body, dictionaryHints: selection.hints,
+            prompt: PromptAssembler.cleanupPrompt(transcript: body, dictionaryHints: unresolvedHints,
                 stylePreferences: input.customInstruction, outputLanguage: input.outputLanguage,
                 language: input.promptLanguage, referenceContext: reference), body: body,
             promptWithoutCustomInstruction: input.customInstruction == nil ? nil : PromptAssembler.cleanupPrompt(
-                transcript: body, dictionaryHints: selection.hints, outputLanguage: input.outputLanguage,
+                transcript: body, dictionaryHints: unresolvedHints, outputLanguage: input.outputLanguage,
                 language: input.promptLanguage, referenceContext: reference), executor: executor)
     }
 
@@ -890,3 +1022,4 @@ public final class CleanupPipeline: @unchecked Sendable {
         }
     }
 }
+

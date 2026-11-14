@@ -64,7 +64,7 @@ typealias DictationFailureReason = AIFailureReason
 enum DictationCleanupOutcome: Equatable {
     case complete(String)
     /// 生成はできたが確認が必要（生成文がある場合はそれを表示用に持つ）。
-    case needsReview(String?)
+    case needsReview(String?, reasonCodes: [String] = [])
     case failed(AIFailureReason)
     /// 利用者の取消。取消後に届いた結果もここへ落とす（STATE-08）。
     case cancelled
@@ -86,6 +86,7 @@ enum DictationCleanupDisposition: Equatable {
 enum DictationResultNotice: Equatable {
     case aiFailed(AIFailureReason)
     case needsReview
+    case validationReview([String])
     /// 音声認識の確定が期限内に終わらなかった（未確定の末尾を含む全文）。
     case transcriptionTimedOut
     /// 確定結果が空で、途中結果だけがある。
@@ -109,11 +110,12 @@ enum DictationCleanupDispositionPolicy {
             return handsFree
                 ? .showResult(original, notice: .aiFailed(reason))
                 : .insertUnformatted(fallback(original), reason: reason)
-        case .needsReview(let text):
+        case .needsReview(let text, let reasonCodes):
+            let notice: DictationResultNotice = reasonCodes.isEmpty ? .needsReview : .validationReview(reasonCodes)
             if let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return .showResult(text, notice: .needsReview)
+                return .showResult(text, notice: notice)
             }
-            return .showResult(original, notice: .needsReview)
+            return .showResult(original, notice: notice)
         case .cancelled:
             return .discard
         }
@@ -262,7 +264,7 @@ enum DictationCleanupMessages {
     static func noticeKeys(_ notice: DictationResultNotice) -> [String] {
         switch notice {
         case .aiFailed(let reason): return [handsFreeCancelledKey] + reasonKeys(reason)
-        case .needsReview: return [needsReviewKey]
+        case .needsReview, .validationReview: return [needsReviewKey]
         case .transcriptionTimedOut: return [transcriptionTimedOutKey]
         case .transcriptionFinalEmpty: return [transcriptionFinalEmptyKey]
         case .transcriptionIncomplete: return [transcriptionIncompleteKey]
@@ -298,7 +300,7 @@ final class DictationCleanupService {
 
     init(
         generator: any TextGenerating = DictationCleanupService.makeOnDeviceGenerator(),
-        pipeline: CleanupPipeline = CleanupPipeline(),
+        pipeline: CleanupPipeline = .product(),
         coordinatorConfiguration: GenerationCoordinator.Configuration = .default,
         deadline: DeadlinePolicy = .cleanup,
         fallbackComputation: (@Sendable (CleanupInput) async -> String)? = nil
@@ -440,8 +442,8 @@ final class DictationCleanupService {
                     return .failed(.generationError)
                 }
                 return .complete(text)
-            case .needsReview:
-                return .needsReview(result.text)
+            case .needsReview(let reasons):
+                return .needsReview(result.text, reasonCodes: reasons.map(\.diagnosticName))
             case .failed(.cancelled):
                 // 利用者が取り消していないのに取消扱いで終わった結果は、黙って捨てず失敗として扱う。
                 return .failed(.generationError)

@@ -608,6 +608,8 @@ private func referenceCleanup(_ item: ReferenceItem, generator: FakeGenerator) a
                 let proposals = value.value.corrections.map { ($0.retracted, $0.replacement) }
                 measures["stageA.proposals"] = Double(proposals.count)
                 let outcome = SelfCorrection.apply(proposals, to: item.transcript)
+                measures["stageA.verifiedProposals"] = Double(outcome.verifiedProposals)
+                measures["stageA.droppedProposals"] = Double(outcome.droppedProposals)
                 spans = outcome.spans
                 if let corrected = outcome.corrected {
                     transcript = corrected
@@ -630,7 +632,8 @@ private func referenceCleanup(_ item: ReferenceItem, generator: FakeGenerator) a
         options: DictionarySelectionOptions(includeMemo: true, promptLanguage: language)
     )
     let prompt = PromptAssembler.cleanupPrompt(
-        transcript: transcript, dictionaryHints: selection.hints, stylePreferences: item.customInstruction,
+        // cleanup@6: spellings already resolved literally are not repeated as hints.
+        transcript: transcript, dictionaryHints: selection.unresolvedHints(in: transcript), stylePreferences: item.customInstruction,
         outputLanguage: item.outputLanguage, language: language
     )
     let (maxTokens, budgetMeasures) = await referenceBudget(

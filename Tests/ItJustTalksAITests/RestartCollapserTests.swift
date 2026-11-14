@@ -221,7 +221,7 @@ struct RestartCollapserTests {
                 #expect(fake.receivedRequests.count == 1)
                 #expect(fake.receivedRequests.first?.prompt == PromptAssembler.cleanupPrompt(transcript: expected, language: language))
                 #expect(input.transcript == source) // The caller's restore-original value is untouched.
-                #expect(result.diagnostics.promptKeys == ["cleanup@5/\(language.rawValue)"])
+                #expect(result.diagnostics.promptKeys == ["cleanup@6/\(language.rawValue)"])
             }
         }
     }

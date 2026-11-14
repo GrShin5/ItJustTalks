@@ -78,89 +78,54 @@ final class InputHistoryStore: ObservableObject {
     }
 
     @discardableResult
+    func recordOutput(
+        id: UUID = UUID(), mode: String, output: String, kind: String, status: String,
+        marks: [String] = [], sourceLabel: AICommandInputSource? = nil,
+        startHistoryEnabled: Bool, currentHistoryEnabled: Bool, retentionDays: Int,
+        cleanupEnabled: Bool = false, cleanupDidFail: Bool = false, latencyMs: Int? = nil
+    ) -> MutationResult {
+        let output = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard VoiceSession.allowsAIHistory(startEnabled: startHistoryEnabled,
+                                          currentEnabled: currentHistoryEnabled),
+              !output.isEmpty else { return .saved }
+        guard !entries.contains(where: { $0.id == id }) else { return .saved }
+        return append(InputHistoryEntry(
+            id: id, mode: mode, storedText: output, storedTextKind: kind,
+            cleanupEnabled: cleanupEnabled, cleanupSucceeded: cleanupEnabled && !cleanupDidFail,
+            insertStatus: status, flags: marks, modelSlug: nil, reasoningEffort: nil,
+            latencyMs: latencyMs, aiCommandInputSource: sourceLabel
+        ), retentionDays: retentionDays)
+    }
+
+    /// Legacy API cannot record a spoken instruction. Kept for history-off privacy checks.
+    @discardableResult
     func recordAICommandTranscriptIfNeeded(
         _ transcript: String, settings: AICommandSettings, currentHistoryEnabled: Bool,
         inputSource: AICommandInputSource
-    ) -> MutationResult {
-        guard VoiceSession.allowsAIHistory(startEnabled: settings.historyEnabled,
-                                          currentEnabled: currentHistoryEnabled) else { return .saved }
-        let entry = InputHistoryEntry.aiCommandTranscript(
-            transcript.trimmingCharacters(in: .whitespacesAndNewlines), inputSource: inputSource
-        )
-        return append(entry, retentionDays: settings.historyRetentionDays)
-    }
+    ) -> MutationResult { .saved }
 
     @discardableResult
     func recordNormalInputIfNeeded(
-        mode: String,
-        historyEnabled: Bool,
-        historyRetentionDays: Int,
-        textToInsert: String,
-        cleanupEnabled: Bool,
-        cleanupDidFail: Bool,
-        insertResult: TextInjectorResult,
-        cleanupLatencyMs: Int?
+        mode: String, historyEnabled: Bool, historyRetentionDays: Int, textToInsert: String,
+        cleanupEnabled: Bool, cleanupDidFail: Bool, insertResult: TextInjectorResult, cleanupLatencyMs: Int?
     ) -> MutationResult {
-        guard historyEnabled else { return .saved }
+        guard NormalInputHistoryPolicy.shouldRecord(insertResult),
+              let decision = HistoryRecordingPolicy.decision(mode: mode, output: textToInsert,
+                  situation: .inserted, cleanupEnabled: cleanupEnabled, cleanupDidFail: cleanupDidFail)
+        else { return .saved }
+        return recordOutput(mode: mode, output: textToInsert, kind: decision.kind, status: decision.status,
+            marks: decision.marks, startHistoryEnabled: historyEnabled, currentHistoryEnabled: historyEnabled,
+            retentionDays: historyRetentionDays, cleanupEnabled: cleanupEnabled,
+            cleanupDidFail: cleanupDidFail, latencyMs: cleanupLatencyMs)
+    }
 
-        let cleanupSucceeded = cleanupEnabled && !cleanupDidFail
-        let insertStatus: String
-        var flags: [String] = []
-
-        switch insertResult {
-        case .inserted, .unicodeSubmitted, .scopedClipboardFallbackSubmitted:
-            insertStatus = InputHistoryInsertStatus.inserted
-        case .externalCompatibilityDisabled, .manualFallbackRequired, .clipboardMayHaveBeenLost,
-             .insertionUnconfirmed,
-             // クリップボードバリアントの3ケースは「AIに指示」専用経路だけが返し、
-             // 通常モードのここへは到達しない。将来到達しても成功扱いにしないための保険。
-             .clipboardVariantPasteConfirmed, .clipboardVariantPasteSubmittedUnverified,
-             .clipboardVariantPasteMayHaveLostClipboard:
-            // 呼び出し元はこのケースを履歴保存前に除外する。将来ここが直接呼ばれても
-            // 成功扱いにしないため、明示的に失敗として分類しておく。
-            insertStatus = InputHistoryInsertStatus.failed
-            flags.append(InputHistoryFlag.insertFailed)
-        case .secureInputBlocked:
-            insertStatus = InputHistoryInsertStatus.secureInputBlocked
-            flags.append(InputHistoryFlag.secureInputBlocked)
-        case .failed:
-            insertStatus = InputHistoryInsertStatus.failed
-            flags.append(InputHistoryFlag.insertFailed)
-        }
-
-        if !cleanupEnabled {
-            flags.append(InputHistoryFlag.noiseCandidate)
-        }
-        if cleanupDidFail {
-            flags.append(InputHistoryFlag.cleanupFailed)
-        }
-
-        let trimmedOutput = textToInsert.trimmingCharacters(in: .whitespacesAndNewlines)
-        let mayStoreText = NormalInputHistoryPolicy.shouldStoreText(
-            historyEnabled: historyEnabled,
-            cleanupEnabled: cleanupEnabled,
-            cleanupDidFail: cleanupDidFail,
-            output: trimmedOutput,
-            result: insertResult
-        )
-
-        let entry = InputHistoryEntry(
-            mode: mode,
-            storedText: mayStoreText ? trimmedOutput : nil,
-            storedTextKind: mayStoreText
-                ? NormalInputHistoryPolicy.storedTextKind(cleanupEnabled: cleanupEnabled)
-                : InputHistoryStoredTextKind.none,
-            cleanupEnabled: cleanupEnabled,
-            cleanupSucceeded: cleanupSucceeded,
-            insertStatus: insertStatus,
-            flags: flags,
-            // 整形はオンデバイスAIだけ。モデル名・推論レベルは保存しない（IP:247）。
-            modelSlug: nil,
-            reasoningEffort: nil,
-            latencyMs: cleanupLatencyMs
-        )
-
-        return append(entry, retentionDays: historyRetentionDays)
+    @discardableResult
+    func updateInsertStatus(id: UUID, status: String) -> MutationResult {
+        guard let index = entries.firstIndex(where: { $0.id == id }),
+              entries[index].insertStatus != status else { return .saved }
+        var candidate = entries
+        candidate[index].insertStatus = status
+        return rewriteAndPublish(candidate)
     }
 
     func load() {

@@ -122,10 +122,38 @@ def check_dictionary(cid, d, where):
             err(cid, "dictionary.memo must be string or null")
 
 
+FIDELITY_TAGS = set("long multiSentence sttPunct noSttPunct endsOpen dict3plus cueCorrection cuelessCorrection filler repetition numbers request question negation handsFree en".split())
+FIDELITY_FIELDS = {"reference", "endsOpen", "dictionarySurfaces", "corrections", "tags"}
+
+
+def validate_fidelity(cid, e):
+    if "reference" in e and (not isinstance(e["reference"], str) or not e["reference"].strip()):
+        err(cid, "reference must be a non-empty string")
+    if "endsOpen" in e and not isinstance(e["endsOpen"], bool):
+        err(cid, "endsOpen must be bool")
+    if e.get("endsOpen") is True and isinstance(e.get("reference"), str) and e["reference"].rstrip().endswith(("。", ".")):
+        err(cid, "endsOpen reference must not end with a period")
+    for field in ("dictionarySurfaces", "tags"):
+        if field in e and not is_str_list(e[field]):
+            err(cid, field + " must be a list of non-empty strings")
+    if is_str_list(e.get("tags")) and any(tag not in FIDELITY_TAGS for tag in e["tags"]):
+        err(cid, "tags contains an unsupported tag")
+    if "corrections" in e:
+        if not isinstance(e["corrections"], list):
+            err(cid, "corrections must be a list")
+        else:
+            for correction in e["corrections"]:
+                if (not isinstance(correction, dict) or set(correction) != {"old", "new"}
+                        or not all(isinstance(v, str) and v.strip() for v in correction.values())):
+                    err(cid, "corrections entries require non-empty old/new strings")
+
+
 def v_cleanup(c, cov):
     cid, i, e = c["id"], c["input"], c["expect"]
+    if isinstance(e, dict):
+        validate_fidelity(cid, e)
     if not (check_keys(cid, i, ("transcript", "customInstruction", "dictionary", "outputLanguage", "handsFree"), "input")
-            and check_keys(cid, e, ("mustContain", "mustNotContain", "language", "noAnswer", "correction"), "expect")):
+            and check_keys(cid, {k: v for k, v in e.items() if k not in FIDELITY_FIELDS} if isinstance(e, dict) else e, ("mustContain", "mustNotContain", "language", "noAnswer", "correction"), "expect")):
         return
     if not isinstance(i["transcript"], str) or not i["transcript"].strip():
         err(cid, "transcript must be a non-empty string")
@@ -471,11 +499,17 @@ def main():
     profiles.add_argument("--holdout2", action="store_true", help="validate the second holdout set (H2C/H2R ids)")
     profiles.add_argument("--holdout3", action="store_true", help="validate the third holdout set (H3C ids)")
     profiles.add_argument("--holdout4", action="store_true", help="validate the sealed independent holdout set")
+    profiles.add_argument("--realistic-en", action="store_true", help="validate English realistic development set")
+    profiles.add_argument("--realistic-holdout-en", action="store_true", help="validate English realistic holdout set")
     args = ap.parse_args()
     holdout2 = args.holdout2
     holdout3 = args.holdout3
     tags = HOLDOUT3_TAGS if holdout3 else HOLDOUT2_TAGS if holdout2 else ()
-    if args.normal_loop:
+    if args.realistic_en or args.realistic_holdout_en:
+        name, prefix, count = ("realistic-en", "REN", 120) if args.realistic_en else ("realistic-holdout-en", "RHE", 60)
+        files = {"cleanup": ("cleanup", prefix, count)}
+        cases_dir = os.path.abspath(args.dir or os.path.join(HERE, name))
+    elif args.normal_loop:
         files = NORMAL_LOOP_FILES
         cases_dir = os.path.abspath(args.dir or os.path.join(HERE, "normal-loop"))
     elif args.accuracy:
@@ -501,7 +535,7 @@ def main():
     if not args.holdout4 and os.path.realpath(cases_dir) == sealed_dir:
         print("holdout4 requires --holdout4", file=sys.stderr)
         return 1
-    siblings = [os.path.join(HERE, name) for name in ("cases", "holdout", "holdout2", "holdout3", "accuracy", "normal-loop")]
+    siblings = [os.path.join(HERE, name) for name in ("cases", "holdout", "holdout2", "holdout3", "accuracy", "normal-loop", "realistic", "realistic-holdout", "realistic-en", "realistic-holdout-en")]
     if args.holdout4:
         siblings.append(os.path.join(HERE, "holdout4"))
     directories = [cases_dir] + [d for d in siblings if os.path.realpath(d) != os.path.realpath(cases_dir)]
@@ -581,7 +615,7 @@ def main():
             "long": {"dur:60": 1, "dur:180": 1, "dur:300": 1, "dur:600": 1,
                      "chars:3000": 1, "chars:6000": 1, "chars:12000": 1},
         }[category]
-        if args.accuracy or args.normal_loop:
+        if args.accuracy or args.normal_loop or args.realistic_en or args.realistic_holdout_en:
             minimums = {}
         elif args.holdout:
             minimums = {
@@ -630,7 +664,7 @@ def main():
         for lang, lo, hi in (("ja", 40, 70), ("en", 10, 40), ("mixed", 10, 30)):
             if not lo <= 100.0 * overall[lang] / total <= hi:
                 err("overall", "language share out of range: " + lang)
-    if total and not (args.holdout or holdout3 or args.holdout4 or args.accuracy or args.normal_loop):
+    if total and not (args.holdout or holdout3 or args.holdout4 or args.accuracy or args.normal_loop or args.realistic_en or args.realistic_holdout_en):
         share = {k: 100.0 * v / total for k, v in overall.items()}
         for k, lo, hi in (("ja", 52, 68), ("en", 12, 28), ("mixed", 12, 28)):
             if not lo <= share[k] <= hi:

@@ -5,7 +5,7 @@ Check the distributor, then paste the entire code block below into an AI coding 
 The [Japanese version](agent-install-prompt.md) has the same content.
 
 ```text
-Build, self-sign and install ItJustTalks 0.1.1 from source as a new installation on this Mac.
+Build, self-sign and install ItJustTalks 0.2.0 from source as a new installation on this Mac.
 Source: https://github.com/GrShin5/ItJustTalks
 
 Rules:
@@ -17,7 +17,7 @@ Rules:
 - On an error, stop there and explain the cause and the next action needed. Do not work around signature or identifier mismatches. Leave launching the app and checking recording and text input to the user.
 
 Requires macOS 27 or later. AI features require Apple silicon, Apple Intelligence turned on, a ready model, and matching Mac and Siri languages. Command Line Tools (Apple tools for building from commands, including Git) are sufficient. Full Xcode is not required (Xcode 27 also works). No Homebrew or OpenSSL 3 installation is needed. You need an account that can write to /Applications (normally an administrator) and 2 GB free space.
-0.1.0 was installed on an Apple M1 MacBook Air (8 GB memory, macOS 27.2, full Xcode 27.2). 0.1.1 was verified with Command Line Tools only: built on an Apple M5 Max and newly installed on an Apple M1 MacBook Air (macOS 27.2). Installation on a Mac without OpenSSL 3 is not yet verified. Macs with Core 3 remain unverified.
+0.1.0 was installed on an Apple M1 MacBook Air (8 GB memory, macOS 27.2, full Xcode 27.2). 0.1.1 was verified with Command Line Tools only: built on an Apple M5 Max and newly installed on an Apple M1 MacBook Air (macOS 27.2). 0.2.0 was built from source and passed automated tests on an Apple M5 Max (64 GB memory). Other Macs have not been checked for 0.2.0. Installation on a Mac without OpenSSL 3 is not yet verified. Macs with Core 3 remain unverified.
 
 Steps:
 1. First perform read-only checks: macOS version, Command Line Tools presence, whether ~/Developer/ItJustTalks is outside Desktop, Documents, iCloud Drive and File Provider storage, and whether /Applications/ItJustTalks.app exists.

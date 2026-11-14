@@ -68,6 +68,26 @@ struct DictionaryRunTilingTests {
         #expect(substitute("コーデックスジェMINI").text == "Codex、Gemini")
     }
 
+    @Test func latinWordSpelledLikeAnEntryIsATile() {
+        #expect(substitute("geminiクロードコードを比べた").text == "Gemini、Claude Codeを比べた")
+        #expect(substitute("GEMINIコーデックス").text == "Gemini、Codex")
+        // Japanese punctuation nearby is Japanese context, so the joint is 「、」 even between Latin words.
+        #expect(substitute("資料、Slack geminiクロードコード Notes").text == "資料、Slack Gemini、Claude Code Notes")
+        // A Latin word alone, or one tile next to it that is not an entry, changes nothing here.
+        #expect(substitute("geminiを使う").text == "geminiを使う")
+        #expect(substitute("geminisクロードコード").text == "geminisクロードコード")
+    }
+
+    @Test func coreOfTwoOrMoreTilesIsReplacedInsideALongerRun() {
+        #expect(substitute("LLMリストクロードコードコーデックスアンチグravityジェmini").text
+                == "LLMリストClaude Code、Codex、Antigravity、Gemini")
+        #expect(substitute("コーデックスクロードコードバックアップ").text == "Codex、Claude Codeバックアップ")
+        // One tile next to untiled katakana stays as spoken.
+        for text in ["ビデオコーデックスです", "コーデックスアップデート", "リストクロードコード"] {
+            #expect(substitute(text).text == text)
+        }
+    }
+
     @Test func mixedScriptFalsePositiveGuards() {
         for text in [
             "ジェnetを使う",      // Latin tail is not a suffix of the spelling

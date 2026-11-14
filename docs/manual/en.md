@@ -92,7 +92,7 @@ If you do not want history saved, choose “Do not save” for each mode in the 
 | Display languages | Japanese and English, selectable separately from the speech-recognition language |
 | AI output languages | Automatic, Japanese, and English. An output language explicitly requested by voice takes priority over the setting |
 | Other AI languages | A complete list of supported languages and their quality cannot be guaranteed. This is separate from speech-recognition support |
-| Verification | 0.1.0 was installed on an Apple M1 MacBook Air (8 GB memory, macOS 27.2, full Xcode 27.2). 0.1.1 was verified with Command Line Tools only: built on an Apple M5 Max and newly installed on an Apple M1 MacBook Air (macOS 27.2). Installation on a Mac without OpenSSL 3 is not yet verified. Macs with Core 3 remain unverified. |
+| Verification | 0.1.0 was installed on an Apple M1 MacBook Air (8 GB memory, macOS 27.2, full Xcode 27.2). 0.1.1 was verified with Command Line Tools only: built on an Apple M5 Max and newly installed on an Apple M1 MacBook Air (macOS 27.2). 0.2.0 was built from source and passed automated tests on an Apple M5 Max (64 GB memory). Other Macs have not been checked for 0.2.0. Installation on a Mac without OpenSSL 3 is not yet verified. Macs with Core 3 remain unverified. |
 | Core 3 Macs | Unverified. Operation is not claimed |
 
 Voice input and transcription may work even if AI is unsupported. Speech recognition must have its own support and permissions.
@@ -119,7 +119,7 @@ The hands-free column below assumes AI assist was ON when recording began.
 | AI not ready, disabled, or unsupported | Inserts the original transcript and notifies you if recognition succeeds | Explains the reason; does not replace text | Displays the original transcript; does not insert or send | Shows guidance; keeps the current setting |
 | Language unsupported by AI | Usually inserts the original transcript and explains why | Explains the reason; does not replace text | Displays the original transcript; does not send | Keeps the draft and reports failure |
 | Text too long | Tries splitting; if that is not possible, inserts the entire original transcript and notifies you | Splits as appropriate for the request; otherwise asks you to narrow the scope | Does not insert or send unless every chunk succeeds | Splits and combines; otherwise asks you to edit |
-| AI refusal or invalid result | Inserts the original transcript and notifies you on failure; displays results needing review | Does not replace automatically | Does not insert or send automatically | Does not apply a candidate that fails validation |
+| AI refusal or invalid result | Inserts the original transcript and notifies you on failure; displays results needing review (plain dictation inserts the text with every spoken word kept; see below) | Does not replace automatically | Does not insert or send automatically | Does not apply a candidate that fails validation |
 | AI timeout or cancellation | On AI timeout, inserts the original transcript. On cancellation, discards the result and temporarily keeps a recoverable original transcript | Discards the result or reports failure; preserves the original selection | Does not send | Keeps the current setting |
 | Speech finalization times out or is empty | Shows interim text or other results for review; does not insert automatically | Does not carry out the instruction; preserves the original selection | Does not send | Not applicable |
 | Audio capture or recognition incomplete | Shows all available text for review; does not insert automatically | Does not carry out the instruction; preserves the original selection | Neither inserts nor sends | Not applicable |
@@ -132,7 +132,7 @@ If the language is not supported for AI processing, the notice reads “This lan
 
 **When audio capture or recognition is incomplete, nothing is inserted or sent automatically.** This applies when speech recognition ended with an error, a recognized tail was never finalized, or some audio was lost. All available text is shown in the result window with this notice: “Audio capture or recognition was incomplete, so automatic processing was stopped. All available text is shown. Review it and copy it as needed.” The notice is the same for Standard, hands-free, and AI Command. AI Command does not carry out the instruction and leaves your selected text untouched. An empty final result is handled like “Speech finalization times out or is empty” in the table above.
 
-**When the AI result may have lost or changed something, it is shown in the result window for review.** Examples are a dropped sentence or phrase, a dropped hedge or condition (such as “たぶん”, “もし”, “maybe”, or “only”), a number missing from one of two facts, a negation moved to a different subject, and untranslated output when the target language is Chinese, Korean, or Japanese. The text is not replaced automatically, and hands-free mode neither inserts nor sends it. The result is also shown for review when an auxiliary such as “〜しておく”, or a predicate of a different kind (such as a request or a negation), has disappeared. This is judged by comparing with what you said before abandoned restarts were removed. Filler removal and the cleanup of parts you clearly restated remain acceptable.
+**When the AI result may have lost or changed something, it is shown in the result window for review.** Examples are a dropped sentence or phrase, a dropped hedge or condition (such as “たぶん”, “もし”, “maybe”, or “only”), a number missing from one of two facts, a negation moved to a different subject, and untranslated output when the target language is Chinese, Korean, or Japanese. The text is not replaced automatically, and hands-free mode neither inserts nor sends it. The result is also shown for review when an auxiliary such as “〜しておく”, or a predicate of a different kind (such as a request or a negation), has disappeared. This is judged by comparing with what you said before abandoned restarts were removed. Filler removal and the cleanup of parts you clearly restated remain acceptable. In plain dictation (no custom instruction, not hands-free, output in the spoken language), such a result is not shown for review; the text is inserted with every spoken word kept, taking only punctuation, filler removal and dictionary spellings from the AI. Text longer than 4,000 characters is still shown for review.
 
 Automatic application stops for protected fields such as passwords, revoked permissions, cancellation, stale results, or a mismatched selection or target in AI Command. Standard and hands-free read the target again when recording stops, so if you move to another field in the same app during recording, the text may be inserted at the caret there (also with Compatibility Input). Automatic sending to external apps through Compatibility Input requires additional consent. Some paths send after confirming the same editable field, and cannot verify that every app has reflected the inserted text.
 
@@ -226,11 +226,11 @@ Under “Standard mode launch key settings”, press “Enter key”, press the 
 
 Under “Basic usage settings”, choose “Automatic stop”. This is shared by Standard mode and AI Command mode. The choices are “3 min”, “5 min (Recommended)”, and “10 min”. If the existing setting is one minute, “1 min (current setting)” also appears. The screen also explains that none of the three modes can start while Secure Input is active.
 
-History is ON from the start, with a default of 180 days for each mode: Standard, hands-free, and AI Command (including Clipboard mode). Choose a retention period under “Standard mode output history”. Standard mode saves output that was safely inserted (the original transcript when AI assist is OFF; not text inserted after AI cleanup failed), along with minimal processing information, on this Mac.
+History is ON from the start, with a default of 180 days for each mode: Standard, hands-free, and AI Command (including Clipboard mode). Choose a retention period under “Standard mode output history”. The final output text and its status are saved on this Mac.
 
 To stop future saving, go to “History” → “History retention” in Settings and choose “Do not save” for each mode. **Existing history is not deleted.** Remove it separately with “Delete all history”, individual deletion, or selected deletion. The screen also shows the storage location.
 
-“Enable hands-free send mode” is optional. The screen explains that enabling it also turns on “Automatically send in external apps” if Compatibility Input Mode is ON. You can turn this off in Settings if you do not need it. Review the launch key, spoken trigger, send key, and the warning that sending cannot be undone. Standard mode custom instructions also apply to hands-free AI cleanup; changes take effect from the next recording. When enabled, you can also choose “Hands-free send mode output history”. Only safely inserted output is saved; send-key-only actions, cancellation, interruption, failure, and text moved to review are not saved.
+“Enable hands-free send mode” is optional. The screen explains that enabling it also turns on “Automatically send in external apps” if Compatibility Input Mode is ON. You can turn this off in Settings if you do not need it. Review the launch key, spoken trigger, send key, and the warning that sending cannot be undone. Standard mode custom instructions also apply to hands-free AI cleanup; changes take effect from the next recording. When enabled, you can also choose “Hands-free send mode output history”. Output shown for review is also saved. Cancellation and a send word without a body are not saved.
 
 ### Step 6: AI Command
 
@@ -238,7 +238,7 @@ The opening notice explains that the clipboard is read only when you press this 
 
 Hands-free send presses the send key (default Return) only after you stop with the spoken trigger “ストップ送信” (or “Send Now” when speech recognition is English) or the stop shortcut (default `fn + Right Shift`), and only when insertion is safe and sending is allowed. Automatic stop and the HUD's ✓ insert only; they do not send. × cancels.
 
-Choose ON or OFF with “Enable AI Command mode”, then choose a retention period under “AI Command mode instruction history”. Only the spoken instruction transcript is saved. Clipboard mode shares this history setting. The selected source, clipboard text, AI answer, audio, and reference links are not saved. “Do not save” stops only future saving.
+Choose ON or OFF with “Enable AI Command mode”, then choose a retention period under “AI Command mode output history”. Clipboard mode shares this setting. Only output, such as inserted or replaced text or an answer shown in a window, is saved. The spoken instruction and original clipboard text are never saved. “Do not save” stops only future saving.
 
 When enabled, choose “Enter key” for each of “Launch key” and “Stop key”, press the actual keys, and confirm each with “Use this key”. The default launch shortcut is `fn + Space` and the stop key is `fn`. Launch shortcuts use one to three keys, including a modifier for combinations. The stop key is a single key. A launch key that overlaps the Standard mode or hands-free send mode key cannot be set; the screen says “This launch key is already used by Standard mode or Hands-free send mode. Choose a different key.” (the same rule as in Settings).
 
@@ -270,7 +270,7 @@ Change the recording method to “Hold to record” to record while holding the 
 
 Fillers are removed only when the speaker actually hesitated. The targets are “えっと”, “えーと”, “えー”, and “あのー”, plus “um” and “uh” in English. This automatic removal keeps “ええ”, “ううん”, and “うーん” as replies or content. “まあ” and “なんか” are removed only when they also stood alone, set off by pauses, in what you actually said. Words inside quotation marks are not touched. However, AI cleanup itself may still drop these words.
 
-Results needing review, or a changed target, go to the result window. On AI failure, Standard mode may insert the original transcript. The most recent Standard mode original transcript is kept temporarily in memory and can be recovered with “Copy last original transcript” in the menu. It is discarded when the next recording starts or after ten minutes, whichever comes first. This is separate from saved history.
+Results needing review, or a changed target, go to the result window. Exception: in plain dictation (no custom instruction, not hands-free, output in the spoken language), a result the checks question is not shown for review; the text is inserted with every spoken word kept, taking only punctuation, filler removal and dictionary spellings from the AI. Text longer than 4,000 characters is still shown for review. On AI failure, Standard mode may insert the original transcript. The most recent Standard mode original transcript is kept temporarily in memory and can be recovered with “Copy last original transcript” in the menu. It is discarded when the next recording starts or after ten minutes, whichever comes first. This is separate from saved history.
 
 ### AI Command
 
@@ -413,7 +413,7 @@ The tabs are “Settings”, “History”, and “Personal dictionary”. Defau
 | --- | --- | --- |
 | Standard mode (output history) | 180 days; saving ON | Do not save / 1 day / 30 days / 180 days / Unlimited. See [Chapter 9](#chapter-9) for saved content |
 | Hands-free send mode (output history) | 180 days; saving ON | Do not save / 1 day / 30 days / 180 days / Unlimited. See [Chapter 9](#chapter-9) for saved content |
-| AI Command mode (instruction history) | 180 days; saving ON | Do not save / 1 day / 30 days / 180 days / Unlimited. See [Chapter 9](#chapter-9) for saved content |
+| AI Command mode (output history) | 180 days; saving ON | Do not save / 1 day / 30 days / 180 days / Unlimited. See [Chapter 9](#chapter-9) for saved content |
 | History display limit | 50 items | 50 / 100 / 200 / all; search covers the displayed range |
 | Search history | Empty | Searches text |
 | History type | All | Standard / hands-free / AI Command / all |
@@ -520,7 +520,7 @@ Each of the two instruction types keeps up to 20 saved versions. Use the back an
 <a id="chapter-9"></a>
 ## 9. History
 
-The “History” tab in Settings lets you review and copy past output or spoken instructions. It does not play back recorded audio.
+The “History” tab in Settings lets you review and copy past output. It does not play back recorded audio.
 
 ![history and per-mode retention periods](images/en/history-tab.png)
 
@@ -528,11 +528,11 @@ The “History” tab in Settings lets you review and copy past output or spoken
 
 | Mode | Initial retention | Saved text |
 | --- | --- | --- |
-| Standard mode | Saving ON; 180 days | Safely inserted output. When AI assist is OFF, the original transcript is saved. No text is saved when AI cleanup failed and the original or a dictionary-spellings-only text was inserted |
-| Hands-free send mode | Saving ON; 180 days | Safely inserted output. No text is saved for send-key-only actions, cancellation, or results moved to review |
-| AI Command / Clipboard mode | Shared; saving ON; 180 days | Only the spoken instruction transcript. The selected source, copied text, AI answer, audio, and reference links are not saved |
+| Standard mode | Saving ON; 180 days | Final output text, including text output after AI cleanup fails |
+| Hands-free send mode | Saving ON; 180 days | Final output text |
+| AI Command / Clipboard mode | Shared; saving ON; 180 days | Only output, such as inserted or replaced text or an answer shown in a window. The spoken instruction and original clipboard text are never saved |
 
-Some operations without saved text may still leave information about the mode and processing. Hidden metadata refers to this information without a text body.
+When output actually occurs, each mode saves exactly one entry with the final output text, including text shown in the result or review window. Its status is recorded, such as shown in window, failed, needs review, or cleanup failed. Pressing “Insert” in the result window updates that same entry rather than creating a second one. Nothing is saved on cancellation or when there is no output; fixed guidance or error messages and a hands-free send word without a body are not saved. In Standard and hands-free mode, text blocked by Secure Input (such as a password field) is not saved; in AI Command mode the output is then shown in the result window and saved like other shown output. An AI Command instruction that was not run because recognition was incomplete is not saved either. Processing information without a text body (mode and status) saved by earlier versions may remain. Hidden metadata refers to this information.
 
 ### Stop saving or change retention
 
@@ -543,7 +543,7 @@ In the “History” tab, choose a retention period separately for Standard, han
 
 Shortening the period prompts for confirmation, then deletes that mode's expired history. To stop all modes from saving, choose “Do not save” for all three.
 
-AI Command history is saved only if saving is ON both when recording starts and when the history is written. If you choose “Do not save” during a recording, that recording's instruction is not saved.
+AI Command history is saved only if saving is ON both when recording starts and when the history is written. If you choose “Do not save” during a recording, that recording's output is not saved.
 
 ### Find, copy, and delete
 
@@ -630,7 +630,7 @@ Very short pronunciations (two characters, or words like コード and メール
 
 ### Restarts
 
-When you restart the same phrase several times, the abandoned starts are removed before AI cleanup, including when fillers such as えー, えっと, or あの sit between them. Only abandoned starts inside one sentence, separated by a Japanese comma, a comma, “…”, and the like, are removed. The app never deletes across a sentence end (。．.！？!? or a line break). A complete sentence followed by a different sentence with the same beginning is kept; for example, 「契約書に署名しました。契約書に署名してください」 and 「資料を送った。資料を送ってください」 keep both sentences.
+When you restart the same phrase several times, the abandoned starts are removed before AI cleanup, including when fillers such as えー, えっと, or あの sit between them. Only abandoned starts inside one sentence, separated by a Japanese comma, a comma, “…”, and the like, are removed. The app never deletes across a sentence end (。．.！？!? or a line break). A complete sentence followed by a different sentence with the same beginning is kept; for example, 「契約書に署名しました。契約書に署名してください」 and 「資料を送った。資料を送ってください」 keep both sentences. Exception: in English plain dictation, an obvious restart marked by a cue such as “No, wait.” or “Actually,” may remove the earlier sentence (for example, “Order 6 boxes. No, wait. 8 boxes.” becomes “Order 8 boxes.”).
 
 Even without punctuation, when a complete sentence is followed by a request or a wish, or when the two differ in whether they are negated, the app does not treat it as a restart and does not delete anything. For example, 「棚を整理しました棚を整理してください」 keeps both parts.
 
@@ -774,7 +774,7 @@ A run such as 「コーデックスクロードコード」 is split and convert
 
 ### Repeated restarts remain
 
-When you restart the same phrase several times, the abandoned starts are removed before AI cleanup. Only abandoned starts inside one sentence are removed; the app never deletes across a sentence end (。．.！？!? or a line break). When a complete sentence is followed by a different sentence with the same beginning, both are kept so that no content is lost. The same applies, even without punctuation, when a complete sentence is followed by a request, a negation, or a wish. Fix any remaining text manually.
+When you restart the same phrase several times, the abandoned starts are removed before AI cleanup. Only abandoned starts inside one sentence are removed; the app never deletes across a sentence end (。．.！？!? or a line break). When a complete sentence is followed by a different sentence with the same beginning, both are kept so that no content is lost. The same applies, even without punctuation, when a complete sentence is followed by a request, a negation, or a wish. Exception: in English plain dictation, an obvious restart marked by a cue such as “No, wait.” or “Actually,” may remove the earlier sentence (for example, “Order 6 boxes. No, wait. 8 boxes.” becomes “Order 8 boxes.”). Fix any remaining text manually.
 
 <a id="chapter-14"></a>
 ## 14. Frequently asked questions
@@ -801,7 +801,7 @@ AI assist controls cleanup for Standard and hands-free modes. “AI Command mode
 
 ### Can I read AI answers in history later?
 
-AI Command history keeps only the transcript of your spoken instruction. It does not save the answer or target text. Copy output you need from the result window or another output display yourself.
+Yes. When AI Command history is ON, answers shown in the window can be read later. The spoken instruction and original clipboard text are never saved.
 
 ### Does splitting always make long text succeed?
 
@@ -894,7 +894,7 @@ If Command Line Tools are missing, run `xcode-select --install` and use the macO
 
 Get the source with `git clone https://github.com/GrShin5/ItJustTalks`, not ZIP. Use a folder outside Desktop, Documents, iCloud Drive and File Provider storage, such as `~/Developer/ItJustTalks`. Check the remote, branch and `git status --short`; stop on modifications, conflicts or a different source.
 
-0.1.0 was installed on an Apple M1 MacBook Air (8 GB memory, macOS 27.2, full Xcode 27.2). 0.1.1 was verified with Command Line Tools only: built on an Apple M5 Max and newly installed on an Apple M1 MacBook Air (macOS 27.2). Installation on a Mac without OpenSSL 3 is not yet verified. Macs with Core 3 remain unverified.
+0.1.0 was installed on an Apple M1 MacBook Air (8 GB memory, macOS 27.2, full Xcode 27.2). 0.1.1 was verified with Command Line Tools only: built on an Apple M5 Max and newly installed on an Apple M1 MacBook Air (macOS 27.2). 0.2.0 was built from source and passed automated tests on an Apple M5 Max (64 GB memory). Other Macs have not been checked for 0.2.0. Installation on a Mac without OpenSSL 3 is not yet verified. Macs with Core 3 remain unverified.
 
 Output follows `ITJUSTTALKS_LANG=ja` / `en` first, otherwise the locale. Unset, C or POSIX means Japanese. For English use `ITJUSTTALKS_LANG=en bash scripts/install.sh`.
 
@@ -1019,7 +1019,7 @@ Some AI agents run commands in a restricted area (a sandbox). There, signature t
 
 | Item | Covered version or form |
 | --- | --- |
-| App version covered | 0.1.1 |
+| App version covered | 0.2.0 |
 | Product name | ItJustTalks |
 | Minimum environment | macOS 27. Check AI hardware support and readiness separately |
 | Installation method | Build from source, self-sign, and install |
@@ -1031,7 +1031,7 @@ This manual is based on the current source. It does not guarantee that future di
 <a id="appendix-d"></a>
 ## Appendix D: Updating
 
-The current update example is 0.1.0 to 0.1.1.
+The current update example is 0.1.1 to 0.2.0.
 
 ### Updating with an AI agent
 
@@ -1063,12 +1063,12 @@ Follow the same flow yourself in Terminal, in the source folder obtained with `g
    bash scripts/verify_app_identity.sh "$previous_app" dist/ItJustTalks.app
    ```
    If the identifier or signature does not match, stop and keep the old app where it is.
-4. In Finder, create a folder for the old version outside sync storage on the same disk (for example `~/ItJustTalks-backups/0.1.0`) and move `ItJustTalks.app` from Applications into it. Do not delete it.
+4. In Finder, create a folder for the old version outside sync storage on the same disk (for example `~/ItJustTalks-backups/0.1.1`) and move `ItJustTalks.app` from Applications into it. Do not delete it.
 5. Confirm that Applications no longer contains `ItJustTalks.app`, then install and compare:
    ```sh
    bash scripts/preflight.sh --install
    bash scripts/install_app.sh
-   bash scripts/verify_app_identity.sh "$HOME/ItJustTalks-backups/0.1.0/ItJustTalks.app" /Applications/ItJustTalks.app
+   bash scripts/verify_app_identity.sh "$HOME/ItJustTalks-backups/0.1.1/ItJustTalks.app" /Applications/ItJustTalks.app
    ```
    Replace the first path with the backup location you chose.
 6. Launch the new version and check settings, history, dictionary, microphone, keys, and input of a short synthetic sentence. If something fails, quit the app, move the new version aside, and move the old version back to Applications. Keep the old version until your checks are done.

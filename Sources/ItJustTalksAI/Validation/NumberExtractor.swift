@@ -113,6 +113,65 @@ enum NumberExtractor {
         return Analysis(text: chars, tokens: tokens)
     }
 
+    /// Translation only: offsets of "one" used as the impersonal pronoun before a modal ("one may feel",
+    /// "one should rest"), or after make/let/help before feel/think/wonder, plus the modal "may" after it
+    /// (not the month). Quantifiers ("only one can go") and number phrases keep "one" a number.
+    static func translationPronounOnes(_ text: String) -> (ones: Set<Int>, modalMay: Set<Int>) {
+        let analysis = analyze(text, excludingIdioms: true)
+        let words = englishWords(in: analysis.text)
+        let modals: Set<String> = ["may", "might", "can", "could", "should", "would", "must", "will", "shall"]
+        let objectVerbs: Set<String> = ["make", "makes", "made", "help", "helps", "helped", "let", "lets"]
+        let quantifiers: Set<String> = ["only", "just", "exactly", "least", "most", "than", "no", "each", "every",
+                                        "the", "this", "that", "any", "which", "another", "per", "and", "or"]
+        var ones = Set<Int>(), modalMay = Set<Int>()
+        for i in words.indices where words[i].text == "one" {
+            let next = i + 1 < words.count && onlySpaces(analysis.text, words[i].end, words[i + 1].offset) ? words[i + 1].text : ""
+            let after = i + 2 < words.count && onlySpaces(analysis.text, words[i + 1].end, words[i + 2].offset) ? words[i + 2].text : ""
+            let previous = i > 0 && onlySpaces(analysis.text, words[i - 1].end, words[i].offset) ? words[i - 1].text : ""
+            if quantifiers.contains(previous) || isNumberWord(previous) || isNumberWord(after) || after.isEmpty { continue }
+            if modals.contains(next) || (objectVerbs.contains(previous) && ["feel", "think", "wonder"].contains(next)) {
+                ones.insert(words[i].offset)
+                if next == "may" { modalMay.insert(words[i + 1].offset) }
+            }
+        }
+        return (ones, modalMay)
+    }
+
+    /// Only a literal single-unit quantity can be represented by an English indefinite article.
+    static func isJapaneseCountedOne(_ token: NumberToken, in analysis: Analysis) -> Bool {
+        guard token.value == "1", token.end == token.offset + 1,
+              ["1", "一"].contains(String(analysis.text[token.offset])) else { return false }
+        // Ordinals and dates are not counts (第1回, 11月1日, 1つ目, 1年生, 1日おき).
+        if token.offset > 0, ["第", "月"].contains(String(analysis.text[token.offset - 1])) { return false }
+        let tail = String(analysis.text[token.end...])
+        guard let counter = ["袋", "個", "つ", "人", "回", "本", "枚", "杯", "台", "匹", "冊", "件", "日", "週", "年", "ヶ月", "か月"]
+            .first(where: { tail.hasPrefix($0) }) else { return false }
+        let rest = tail.dropFirst(counter.count)
+        return !["目", "生", "中", "前", "後", "おき", "ずつ", "あたり", "当たり", "毎"].contains { rest.hasPrefix($0) }
+    }
+
+    static func singularArticlePhraseCount(_ text: String) -> Int {
+        let chars = Array(normalize(text))
+        let words = englishWords(in: chars)
+        let nonNouns: Set<String> = ["of", "to", "and", "or", "is", "was", "has", "had", "does", "did", "may", "can", "should", "would", "must", "will"]
+        var count = 0
+        // Quantifier phrases ("a few", "a couple of", "half an hour") are not a single item.
+        let quantities: Set<String> = ["few", "couple", "lot", "lots", "little", "pair", "bunch", "number", "group",
+                                       "handful", "half", "quarter", "dozen", "hundred", "thousand", "million", "bit",
+                                       "series", "set", "range", "variety", "majority", "minority", "total"]
+        for i in words.indices where ["a", "an"].contains(words[i].text) {
+            if i > 0, ["half", "quite", "many", "such", "what", "rather"].contains(words[i - 1].text) { continue }
+            var j = i + 1
+            if j < words.count, ["single", "whole"].contains(words[j].text),
+               onlySpaces(chars, words[i].end, words[j].offset) { j += 1 }
+            guard j < words.count, onlySpaces(chars, words[j - 1].end, words[j].offset),
+                  !isNumberWord(words[j].text), !nonNouns.contains(words[j].text), !quantities.contains(words[j].text),
+                  !words[j].text.hasSuffix("s") else { continue }
+            count += 1
+        }
+        return count
+    }
+
     /// Bare ambiguous month spellings are only evidence for an extracted source month of the same name.
     static func bareCapitalizedMonths(in analysis: Analysis) -> [String] {
         let covered = Set(analysis.tokens.map(\.offset))

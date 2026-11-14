@@ -161,7 +161,14 @@ public struct DictionaryLiteralSubstitution: Sendable {
                 guard Self.hasBoundary(in: text, at: range.lowerBound, before: true, term: term),
                       Self.hasBoundary(in: text, at: range.upperBound, before: false, term: term),
                       String(text[range]) != term.preferred else { continue }
-                matches.append(Match(span: span, range: range, replacement: term.preferred, ranks: [term.rank], count: 1))
+                // A Latin spelling that replaces a katakana reading next to a digit is kept apart from it
+                // (「フェーズ2」 → "Phase 2"), so the term and the number stay separate words.
+                var replacement = term.preferred
+                if !term.isLatin, Self.isLatinReading(term.preferred) {
+                    if range.lowerBound > text.startIndex, Self.isDigit(text[text.index(before: range.lowerBound)]) { replacement = " " + replacement }
+                    if range.upperBound < text.endIndex, Self.isDigit(text[range.upperBound]) { replacement += " " }
+                }
+                matches.append(Match(span: span, range: range, replacement: replacement, ranks: [term.rank], count: 1))
             }
         }
         // A tiled run covers every single-term match inside it, so it wins by length below.
@@ -260,9 +267,12 @@ public struct DictionaryLiteralSubstitution: Sendable {
     static let mixedCoverage: ClosedRange<Double> = 0.8...1.6
 
     /// Maximal runs of katakana/Latin characters (no hiragana, kanji, punctuation or whitespace) that
-    /// contain katakana. A run is replaced only when it is fully tiled by ≥2 readings (each ≥3
+    /// contain katakana. A run is replaced when it is fully tiled by ≥2 readings (each ≥3
     /// graphemes not counting the long-vowel mark, so コード / メール cannot be tiles) or by one
-    /// mixed-script fragment; partial tilings replace nothing.
+    /// mixed-script fragment. A whole Latin segment spelled like a one-word entry (gemini → Gemini)
+    /// is also a tile. When the run is not fully tiled, a contiguous core of ≥2 tiles at its head or
+    /// tail (or in the middle) is replaced and the untiled rest is kept (LLMリスト + クロードコードコーデックス);
+    /// a single tile next to untiled text replaces nothing.
     private static func runMatches(
         in text: String, folded: FoldedText, terms: [Term], mixedTerms: [MixedTerm], protected: [Range<Int>]
     ) -> [Match] {
@@ -311,29 +321,64 @@ public struct DictionaryLiteralSubstitution: Sendable {
                 guard !cancellation.isCancelled() else { return [] }
                 tiles[span.lowerBound, default: []].append(Tile(end: span.upperBound, preferred: term.preferred, rank: term.rank, mixed: true))
             }
-            // Fewest tiles first, then the lowest rank sum; deterministic for equal keys.
-            var best: [Int: (tiles: Int, rankSum: Int, path: [Tile])] = [run.lowerBound: (0, 0, [])]
-            for position in run {
+            // A maximal Latin segment equal to a one-word Latin spelling is the word itself (case aside).
+            var segmentStart = run.lowerBound
+            while segmentStart < run.upperBound {
                 guard !cancellation.isCancelled() else { return [] }
-                guard let current = best[position] else { continue }
-                for tile in tiles[position] ?? [] {
-                    guard !cancellation.isCancelled() else { return [] }
-                    let candidate = (tiles: current.tiles + 1, rankSum: current.rankSum + tile.rank, path: current.path + [tile])
-                    if let existing = best[tile.end],
-                       (existing.tiles, existing.rankSum) <= (candidate.tiles, candidate.rankSum) { continue }
-                    best[tile.end] = candidate
+                guard scripts[segmentStart] == .latin else { segmentStart += 1; continue }
+                var segmentEnd = segmentStart
+                while segmentEnd < run.upperBound, scripts[segmentEnd] == .latin { segmentEnd += 1 }
+                let segment = Array(folded.scalars[segmentStart..<segmentEnd])
+                for term in mixedTerms where term.latin.elementsEqual(segment)
+                    && term.preferred.unicodeScalars.allSatisfy({ $0.properties.isAlphabetic }) {
+                    tiles[segmentStart, default: []].append(Tile(end: segmentEnd, preferred: term.preferred, rank: term.rank, mixed: false))
+                }
+                segmentStart = segmentEnd
+            }
+            // Fewest tiles first, then the lowest rank sum; deterministic for equal keys.
+            func tilings(from start: Int) -> [Int: (tiles: Int, rankSum: Int, path: [Tile])]? {
+                var best: [Int: (tiles: Int, rankSum: Int, path: [Tile])] = [start: (0, 0, [])]
+                for position in start..<run.upperBound {
+                    guard !cancellation.isCancelled() else { return nil }
+                    guard let current = best[position] else { continue }
+                    for tile in tiles[position] ?? [] {
+                        guard !cancellation.isCancelled() else { return nil }
+                        let candidate = (tiles: current.tiles + 1, rankSum: current.rankSum + tile.rank, path: current.path + [tile])
+                        if let existing = best[tile.end],
+                           (existing.tiles, existing.rankSum) <= (candidate.tiles, candidate.rankSum) { continue }
+                        best[tile.end] = candidate
+                    }
+                }
+                return best
+            }
+            guard let full = tilings(from: run.lowerBound) else { return [] }
+            var core: (span: Range<Int>, tiles: Int, rankSum: Int, path: [Tile])?
+            if let tiling = full[run.upperBound], tiling.tiles >= 2 || tiling.path.first?.mixed == true {
+                core = (run, tiling.tiles, tiling.rankSum, tiling.path)
+            } else {
+                // Partial: the longest core of ≥2 tiles; ties go to fewer tiles, lower ranks, earlier start.
+                for start in run where !(tiles[start] ?? []).isEmpty {
+                    guard let best = start == run.lowerBound ? full : tilings(from: start) else { return [] }
+                    for (end, tiling) in best where end > start && tiling.tiles >= 2 {
+                        let candidate = (span: start..<end, tiles: tiling.tiles, rankSum: tiling.rankSum, path: tiling.path)
+                        if let current = core {
+                            let lhs = (-candidate.span.count, candidate.tiles, candidate.rankSum, candidate.span.lowerBound)
+                            let rhs = (-current.span.count, current.tiles, current.rankSum, current.span.lowerBound)
+                            guard lhs < rhs else { continue }
+                        }
+                        core = candidate
+                    }
                 }
             }
-            guard let tiling = best[run.upperBound],
-                  tiling.tiles >= 2 || tiling.path.first?.mixed == true else { continue }
-            let range = folded.ranges[run.lowerBound].lowerBound..<folded.ranges[run.upperBound - 1].upperBound
+            guard let core else { continue }
+            let range = folded.ranges[core.span.lowerBound].lowerBound..<folded.ranges[core.span.upperBound - 1].upperBound
             let surrounding = String(text[..<range.lowerBound].suffix(32)) + String(text[range.upperBound...].prefix(32))
-            let japanese = surrounding.unicodeScalars.contains { PhoneticReading.isKana($0) || PhoneticReading.isHan($0) }
+            let japanese = surrounding.unicodeScalars.contains { PhoneticReading.isKana($0) || PhoneticReading.isHan($0) || "、。".unicodeScalars.contains($0) }
             let latin = surrounding.unicodeScalars.contains { $0.isASCII && $0.properties.isAlphabetic }
             let separator = !japanese && latin ? ", " : runSeparator
-            let replacement = tiling.path.map(\.preferred).joined(separator: separator)
+            let replacement = core.path.map(\.preferred).joined(separator: separator)
             guard String(text[range]) != replacement else { continue }
-            matches.append(Match(span: run, range: range, replacement: replacement, ranks: tiling.path.map(\.rank), count: tiling.tiles))
+            matches.append(Match(span: core.span, range: range, replacement: replacement, ranks: core.path.map(\.rank), count: core.tiles))
         }
         return matches
     }
@@ -476,10 +521,20 @@ public struct DictionaryLiteralSubstitution: Sendable {
         let adjacentIsAlphanumeric = adjacentScalars.allSatisfy(\.isASCII)
             ? adjacentScalars.contains(where: isASCIIAlphanumeric)
             : TextFolding.fold(String(adjacent)).unicodeScalars.contains(where: isASCIIAlphanumeric)
-        if preferredEdge.map(isASCIIAlphanumeric) == true, adjacentIsAlphanumeric { return false }
+        // A katakana reading may touch a digit ("フェーズ2"); Latin letters still block it ("コーデックスapp").
+        // The preferred spelling must end in a letter on that side: "Claude 3" next to 「3」 stays blocked.
+        let digitNextToKana = !term.isLatin && isLatinReading(term.preferred)
+            && script(before ? right : left) == .katakana && isDigit(adjacent)
+            && preferredEdge.map { $0.properties.isAlphabetic } == true
+        if preferredEdge.map(isASCIIAlphanumeric) == true, adjacentIsAlphanumeric, !digitNextToKana { return false }
         if term.isLatin, adjacentIsAlphanumeric { return false }
         let lhs = script(left), rhs = script(right)
         return lhs == .other || rhs == .other || lhs != rhs
+    }
+
+    private static func isDigit(_ character: Character) -> Bool {
+        let scalars = TextFolding.fold(String(character)).unicodeScalars
+        return !scalars.isEmpty && scalars.allSatisfy { $0.isASCII && $0.properties.numericType != nil }
     }
 
     private static func isLatinReading(_ text: String) -> Bool {

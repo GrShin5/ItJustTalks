@@ -97,6 +97,7 @@ func runEvaluation(_ options: RunOptions) async throws {
 
 do {
     switch try OptionParser.parse(Array(CommandLine.arguments.dropFirst())) {
+
     case .run(let options):
         try await runEvaluation(options)
     case .rescore(let options, let input):

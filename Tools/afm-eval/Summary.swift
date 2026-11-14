@@ -114,6 +114,7 @@ struct RoutingSummary: Codable, Sendable {
 }
 
 struct Summary: Codable, Sendable {
+    var fidelity: [String: [String: [String: Double]]]? = nil
     var long: LongSummary? = nil
     var settings: SettingsRecord
     var model: ModelRecord
@@ -224,6 +225,7 @@ enum SummaryBuilder {
         }
 
         return Summary(
+            fidelity: fidelitySummary(records),
             long: records.contains(where: { $0.category == "long" }) ? LongSummary(records.filter { $0.category == "long" }) : nil,
             settings: settings, model: model, records: records.count, outcomes: outcomes,
             passByCategory: byCategory, passByCategoryAndLang: byCategoryLang,
@@ -372,6 +374,71 @@ enum SummaryBuilder {
 
         out.append("## Tokens")
         out.append("- average input \(summary.averageInputTokens.map { String(format: "%.0f", $0) } ?? "-"), average output \(summary.averageOutputTokens.map { String(format: "%.0f", $0) } ?? "-"); truncated results: \(summary.truncatedCount)")
+        if let fidelity = summary.fidelity {
+            out.append("## Fidelity metrics")
+            for run in fidelity.keys.sorted() {
+                for group in (fidelity[run] ?? [:]).keys.sorted() {
+                    let values = fidelity[run]?[group] ?? [:]
+                    out.append("### " + run + " / " + group)
+                    out.append(table(["metric", "value"], values.keys.sorted().map {
+                        [$0, String(format: "%.4f", values[$0] ?? 0)]
+                    }))
+                }
+            }
+        }
         return out.joined(separator: "\n\n") + "\n"
+    }
+}
+
+
+extension SummaryBuilder {
+    /// Missing measurements are excluded, with explicit sample counts. Rates are fractions.
+    static func fidelitySummary(_ records: [EvalRecord]) -> [String: [String: [String: Double]]] {
+        var result: [String: [String: [String: Double]]] = [:]
+        for (run, runs) in Dictionary(grouping: records.filter { $0.category == "cleanup" }, by: { $0.run }) {
+            var groups = ["all": runs]
+            for record in runs {
+                for tag in Set(record.judge?.fidelity?.tags ?? []) { groups["tag:" + tag, default: []].append(record) }
+            }
+            for (group, rows) in groups {
+                let metrics = rows.compactMap { $0.judge?.fidelity }
+                var values: [String: Double] = [:]
+                func aggregate(_ name: String, _ numbers: [Double]) {
+                    values[name + ".n"] = Double(numbers.count)
+                    if !numbers.isEmpty {
+                        values[name + ".total"] = numbers.reduce(0, +)
+                        values[name + ".mean"] = numbers.reduce(0, +) / Double(numbers.count)
+                    }
+                }
+                aggregate("refCER", metrics.compactMap { $0.refCER })
+                aggregate("addedChars", metrics.map { Double($0.addedChars) })
+                aggregate("unauthorizedDeletedChars", metrics.compactMap { $0.unauthorizedDeletedChars.map(Double.init) })
+                aggregate("endsOpenKept", metrics.compactMap { $0.endsOpenKept.map { $0 ? 1.0 : 0.0 } })
+                aggregate("correctionsOK", metrics.flatMap { ($0.correctionsOK ?? []).map { $0 ? 1.0 : 0.0 } })
+                let total = metrics.compactMap { $0.dictionaryTotal }.reduce(0, +)
+                values["dictionaryTotal"] = Double(total)
+                if total > 0 { values["dictionaryHitRate"] = Double(metrics.compactMap { $0.dictionaryHits }.reduce(0, +)) / Double(total) }
+                for name in ["comma", "period"] {
+                    let parts = metrics.compactMap { $0.punctuation?[name] }
+                    if !parts.isEmpty {
+                        let pooled = FidelityMetrics.Punctuation(matched: parts.map { $0.matched }.reduce(0, +),
+                            predicted: parts.map { $0.predicted }.reduce(0, +), expected: parts.map { $0.expected }.reduce(0, +))
+                        values[name + ".F1"] = pooled.f1
+                    }
+                }
+                let validators = rows.compactMap { $0.validator }
+                for status in ["complete", "needsReview", "failed"] {
+                    if !validators.isEmpty { values["disposition." + status + ".percent"] = 100 * Double(validators.filter { $0.status == status }.count) / Double(validators.count) }
+                }
+                for validator in validators {
+                    for reason in validator.reasons { values["reason." + reason, default: 0] += 1 }
+                }
+                let latency = rows.compactMap { $0.totalLatencyMs ?? $0.latencyMs }.sorted()
+                values["latency.p50Ms"] = LatencyStats.percentile(latency, 0.5)
+                values["latency.p90Ms"] = LatencyStats.percentile(latency, 0.9)
+                result[String(run), default: [:]][group] = values
+            }
+        }
+        return result
     }
 }

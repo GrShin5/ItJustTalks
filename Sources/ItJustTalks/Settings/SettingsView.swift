@@ -156,7 +156,7 @@ private enum HistoryRetentionScope {
         case .handsFreeSend:
             japanese = "ハンズフリー送信モード（出力履歴）"
         case .aiCommand:
-            japanese = "AIに指示モード（指示文の履歴）"
+            japanese = "AIに指示モード（出力履歴）"
         }
         return AppLocalizer.text(japanese, language: language)
     }
@@ -1492,7 +1492,7 @@ struct SettingsView: View {
                 .frame(maxWidth: 720, alignment: .leading)
 
                 helperText("「保存しない」を選ぶと、そのモードの新しい履歴は保存されません。既存の履歴は削除されないため、消したい場合は「履歴をすべて削除」または各履歴の削除を使ってください。保持期間を短くする場合は、そのモードの古い履歴だけを確認後に削除します。")
-                helperText("通常モードは安全に挿入できた出力本文だけを保存します。ハンズフリー送信モードは、安全に本文を挿入できた出力だけを別に保存します。AIに指示モードは音声指示の文字起こしだけを保存し、クリップボードモードも同じ履歴に「クリップボードモード」として表示します。選択テキスト、クリップボード本文、回答、音声、参照リンクは保存しません。")
+                helperText("通常モードは挿入または結果ウィンドウに表示した出力本文を保存します。ハンズフリー送信モードも挿入または表示した本文を別に保存します。AIに指示モードは出力本文だけを保存し、クリップボードモードも同じ履歴に「クリップボードモード」として表示します。元の選択テキスト、元のクリップボード本文、音声指示、音声は保存しません。")
             }
 
             settingsSection {
@@ -1561,7 +1561,7 @@ struct SettingsView: View {
             }
             .disabled(historyStore.entries.isEmpty && !historyNeedsAttention)
 
-            helperText("「履歴をすべて削除」は、保存済み本文とメタデータをすべて削除します。AIアシストがOFFでも、安全に挿入した本文は履歴設定に従って保存・表示されます。AIアシストに失敗した場合など、本文が表示されなくても、使用日時や使用モデル情報などが、このMacにメタデータとして残る可能性があります。")
+            helperText("「履歴をすべて削除」は、保存済み本文とメタデータをすべて削除します。AIアシストがOFFでも、安全に挿入した本文は履歴設定に従って保存・表示されます。AIアシストに失敗して未整形の本文を挿入した場合や、結果ウィンドウに本文を表示した場合も保存します。出力前に中止した場合は保存しません。過去の本文のない履歴も全削除の対象です。")
         }
         .padding(.horizontal, uiMetrics.layout(20))
         .padding(.bottom, uiMetrics.layout(20))
@@ -1599,7 +1599,7 @@ struct SettingsView: View {
             selection: handsFreeSendHistoryRetentionBinding
         )
         retentionPicker(
-            title: "AIに指示モード（指示文の履歴）",
+            title: "AIに指示モード（出力履歴）",
             selection: aiCommandHistoryRetentionBinding
         )
     }

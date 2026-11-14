@@ -35,7 +35,8 @@ final class Pipelines: @unchecked Sendable {
         let guardrails = harness.options.guardrails
         self.cleanupPipeline = CleanupPipeline(configuration: .init(
             includeDictionaryMemo: harness.options.dictionaryMemo,
-            guardrailsOverride: guardrails == .auto ? nil : guardrails.mode(for: .cleanup)
+            guardrailsOverride: guardrails == .auto ? nil : guardrails.mode(for: .cleanup),
+            editProjection: harness.options.projection
         ))
         self.commandPipeline = CommandPipeline(configuration: .init(
             includeDictionaryMemo: harness.options.dictionaryMemo,
@@ -573,7 +574,8 @@ final class Pipelines: @unchecked Sendable {
             let pipeline = CleanupPipeline(configuration: .init(
                 includeDictionaryMemo: harness.options.dictionaryMemo,
                 guardrailsOverride: guardrails == .auto ? nil : guardrails.mode(for: .cleanup),
-                chunkReferenceContext: harness.options.chunkContext.referenceContext
+                chunkReferenceContext: harness.options.chunkContext.referenceContext,
+                editProjection: harness.options.projection
             ))
             let input = CleanupInput(transcript: item.text, promptLanguage: language,
                                      outputLanguage: outputLanguage(item.language, language), handsFree: item.handsFree)

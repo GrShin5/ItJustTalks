@@ -6,7 +6,8 @@ TEMP_PACKAGE="$(mktemp -d "${TMPDIR:-/tmp}/afm-contracts.XXXXXX")"
 trap 'rm -rf "$TEMP_PACKAGE"' EXIT
 mkdir -p "$TEMP_PACKAGE/Sources" "$TEMP_PACKAGE/Tests"
 cp -R "$ROOT/Sources/ItJustTalksAI" "$TEMP_PACKAGE/Sources/"
-for file in Cases Judge Records Options CancelRecovery RunManifest Rescore; do
+FILES=(Cases Judge Records Options CancelRecovery RunManifest Rescore)
+for file in "${FILES[@]}"; do
   cp "$ROOT/Tools/afm-eval/$file.swift" "$TEMP_PACKAGE/Tests/"
 done
 cp "$ROOT/Evaluation/tests/AFMEvalContractTests.swift" "$TEMP_PACKAGE/Tests/"

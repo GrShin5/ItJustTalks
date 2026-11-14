@@ -1078,9 +1078,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     @Published var menuBarIconName = "mic"
     @Published private(set) var opensDebugMainWindowAutomatically = false
     @Published private(set) var isApplyingLanguageProfile = false
-    /// クリップボードバリアントの貼り付けを送出した直近のAI出力。メモリ上のみで、
-    /// ディスクへは書かない。履歴（`InputHistoryStore`）へも渡さない。次のAI実行で
-    /// 上書きされ、アプリ終了で消える。
+    /// In-memory recovery copy of the latest clipboard-variant output.
+    /// Output history is recorded separately according to history consent.
     @Published private(set) var lastAICommandOutput: String?
     @Published private(set) var storageNotice: String?
     /// メニュー「直前の原文をコピー」を有効にするか。本文そのものは公開しない。
@@ -2308,6 +2307,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         clearHandsFreeSendTriggerCandidate()
         clearRecordingStartTimeout(for: cancelledSession)
         cancelledSession?.cancel()
+
         if let sessionID = cancelledSession?.id {
             dictationCleanup.cancel(operation: sessionID)
         }
@@ -2348,6 +2348,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         clearPendingNormalHoldState()
         clearHandsFreeSendTriggerCandidate()
         cancelledSession?.cancel()
+
         if let cancelledSession, cancelledSession.mode == .voiceInput {
             // 取消後に整形結果が届いても挿入・送信しない（STATE-08）。
             dictationCleanup.cancel(operation: cancelledSession.id)
@@ -2553,6 +2554,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 appState.setPhase(.idle)
                 hud.clearAICommandState()
                 hud.hide()
+
                 aiCommandResultWindows.show(AICommandResultPayload(
                     spokenInstruction: "",
                     selectedText: nil,
@@ -2740,6 +2742,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         recordingStartTask?.cancel()
         clearRecordingStartTimeout()
         activeVoiceSession = session
+
         // 直前の原文は次の録音開始まで（ADD-01）。前回の「未整形」通知もここで消す。
         lastOriginalTranscript.recordingStarted(sessionID: session.id)
         dictationNotice = nil
@@ -3038,6 +3041,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         if session.mode == .voiceInput {
             let stoppedTarget = NormalPasteTarget.capture()
             let stoppedDestination = InsertionDestination.capture()
+            dictationReviewSession = session
+            pendingHistoryCleanupDidFail = false
             session.normalPasteTarget = stoppedTarget
             session.insertionDestination = stoppedDestination?.processIdentifier == stoppedTarget?.processIdentifier
                 ? stoppedDestination
@@ -3097,6 +3102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             let streamID = session.handsFreeSendSession?.snapshot.streamID ?? session.id
             var stopResult = await transcriptionEngine.stopStreamingResult(streamID: streamID)
             stopResult.audioLost = recordingFailure.hasFailed
+
             let stopFlags = (timedOut: stopResult.timedOut, recognitionFailed: stopResult.recognitionFailed,
                              unfinalizedTail: stopResult.hasUnfinalizedTail, audioLost: stopResult.audioLost)
             AppLog.shared.info("[Telemetry] transcription_stop timedOut=\(stopFlags.timedOut) recognitionFailed=\(stopFlags.recognitionFailed) unfinalizedTail=\(stopFlags.unfinalizedTail) audioLost=\(stopFlags.audioLost)")
@@ -3133,7 +3139,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     hud.hide()
                     if notice == .transcriptionIncomplete || !reviewText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         lastOriginalTranscript.remember(reviewText, sessionID: session.id)
-                        presentDictationResult(reviewText, notice: notice)
+                        presentDictationResult(reviewText, notice: notice, session: session)
                     }
                     return
                 }
@@ -3148,6 +3154,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 appState.setPhase(.idle)
                 hud.clearAICommandState()
                 hud.hide()
+
+                // The recognized text here is the spoken instruction, which history never stores.
                 aiCommandResultWindows.show(AICommandResultPayload(
                     spokenInstruction: "",
                     selectedText: nil,
@@ -3168,7 +3176,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     hud.hide()
                     presentNormalInputFallback(
                         handsFreeSession.voiceTriggerFallbackTranscript ?? transcriptionEngine.partialText,
-                        notice: uiText("音声トリガー後の認識結果を安全に確定できなかったため、自動挿入・送信を中止しました。内容を確認してコピーしてください。")
+                        notice: uiText("音声トリガー後の認識結果を安全に確定できなかったため、自動挿入・送信を中止しました。内容を確認してコピーしてください。"),
+                        historySituation: .reviewShown, historySession: session
                     )
                     return
                 }
@@ -3188,7 +3197,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 hud.hide()
                 presentNormalInputFallback(
                     transcript,
-                    notice: uiText("音声トリガーを安全に除去できなかったため、自動挿入・送信を中止しました。内容を確認してコピーしてください。")
+                    notice: uiText("音声トリガーを安全に除去できなかったため、自動挿入・送信を中止しました。内容を確認してコピーしてください。"),
+                    historySituation: .reviewShown, historySession: session
                 )
                 return
             case .sendKeyOnly(let sendRequest):
@@ -3299,14 +3309,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         sendAfterInsert: SendAfterInsertRequest?
     ) async {
 
-        if session.mode == .aiCommand {
-            saveAICommandTranscriptIfNeeded(
-                transcript,
-                settings: session.aiCommandSettings,
-                inputSource: session.inputSource
-            )
-        }
-
         guard !Task.isCancelled, !session.isCancelled else {
             appState.setPhase(.idle)
             hud.clearHandsFreeSendState()
@@ -3372,6 +3374,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 AppLog.shared.info("処理キャンセル: AI整形後に停止")
                 return
             }
+
             var fallbackText = transcriptForPipeline
             if case .failed = outcome, !handsFree {
                 guard let text = await dictationCleanup.fallbackText(
@@ -3432,7 +3435,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 appState.setPhase(.idle)
                 hud.clearHandsFreeSendState()
                 hud.hide()
-                presentDictationResult(reviewText, notice: notice)
+                presentDictationResult(reviewText, notice: notice, session: session)
                 return
             }
         } else {
@@ -3472,6 +3475,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         sendAfterInsert: SendAfterInsertRequest?
     ) async {
         guard ownsCurrentNormalProcessing(session) else { return }
+        // A result window shown from this insertion path carries the same cleanup-failed mark.
+        pendingHistoryCleanupDidFail = cleanupDidFail
         // 挿入・送信キーの本文照合・履歴・手動フォールバックが同じ文字列を見るよう、
         // ここで一度だけ不可視文字を除去する。TextInjector側の除去はこの後は冪等に働く。
         // 除去して空になった場合は元の文字列を渡し、拒否の判断はTextInjectorへ委ねる。
@@ -3506,36 +3511,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             }
         )
         let result = insertionOutcome.result
+        if NormalInputHistoryPolicy.shouldRecord(result) {
+            recordSessionOutput(textToInsert, session: session, situation: .inserted,
+                                cleanupDidFail: cleanupDidFail, latencyMs: cleanupLatencyMs)
+        } else {
+            // The result type is needed to diagnose insertion failures (2026-07-30). A window that shows
+            // the text records it as its own output event.
+            AppLog.shared.warn(
+                "挿入を確認できなかったため、挿入としての出力履歴は保存しません（result=\(Self.describeInsertionResult(result))）"
+            )
+        }
         guard ownsCurrentNormalProcessing(session) else {
             appState.setPhase(.idle)
             hud.hide()
             AppLog.shared.info("処理キャンセル: 挿入後・履歴保存前に停止")
             return
         }
-        if NormalInputHistoryPolicy.shouldRecord(result) {
-            let usesHandsFreeSendHistory = session.handsFreeSendSession != nil
-            let currentSettings = settingsStore.settings
-            recordInputHistoryIfNeeded(
-                mode: usesHandsFreeSendHistory ? InputHistoryMode.handsFreeSend : InputHistoryMode.voiceInput,
-                historyEnabled: usesHandsFreeSendHistory
-                    ? currentSettings.handsFreeSendSettings.historyEnabled
-                    : currentSettings.historyEnabled,
-                historyRetentionDays: usesHandsFreeSendHistory
-                    ? currentSettings.handsFreeSendSettings.historyRetentionDays
-                    : currentSettings.historyRetentionDays,
-                textToInsert: textToInsert,
-                cleanupEnabled: session.cleanupEnabledAtRecordingStart,
-                cleanupDidFail: cleanupDidFail,
-                insertResult: result,
-                cleanupLatencyMs: cleanupLatencyMs
-            )
-        } else {
-            // 種別を出さないと切り分けができない。Safariの不具合調査では、失敗した
-            // resultがログに残らないことが原因特定を長引かせた（2026-07-30）。
-            AppLog.shared.warn(
-                "挿入準備を確認できなかったため出力履歴は保存しません（result=\(Self.describeInsertionResult(result))）"
-            )
-        }
+        pendingHistoryCleanupDidFail = cleanupDidFail
         logNormalInputCompletion(
             result: result,
             cleanupLatencyMs: cleanupLatencyMs,
@@ -3561,6 +3553,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             AppLog.shared.info("処理キャンセル: 擬似送信待機中に停止")
             return
         }
+
         let sendWasBlocked = sendDispatchResult.map { $0 != .sent } ?? false
 
         switch result {
@@ -3593,7 +3586,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             hud.hide()
             presentNormalInputFallback(
                 textToInsert,
-                notice: uiText("以前のクリップボード内容が失われた可能性があります。必要な内容を確認してください。")
+                notice: uiText("以前のクリップボード内容が失われた可能性があります。必要な内容を確認してください。"),
+                historySituation: .insertionFailedShown, historySession: session
             )
         case .manualFallbackRequired where insertionOutcome.fallbackReason == .payloadTooLong:
             // 通常モードにも同じ上限がある。理由を伏せると「短い文は入るのに長い文は
@@ -3602,7 +3596,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             hud.hide()
             presentNormalInputFallback(
                 textToInsert,
-                notice: payloadTooLongInsertionFallbackNotice()
+                notice: payloadTooLongInsertionFallbackNotice(),
+                historySituation: .insertionFailedShown, historySession: session
             )
         case .secureInputBlocked, .manualFallbackRequired, .insertionUnconfirmed, .failed,
              // クリップボードバリアントの3ケースは「AIに指示」専用経路（`insertAICommandOutput`）
@@ -3611,7 +3606,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
              .clipboardVariantPasteMayHaveLostClipboard:
             appState.setPhase(.idle)
             hud.hide()
-            presentNormalInputFallback(textToInsert)
+            // Secure Input (a password field) keeps the body out of history, as before.
+            if case .secureInputBlocked = result {
+                presentNormalInputFallback(textToInsert, historySituation: nil)
+            } else {
+                presentNormalInputFallback(textToInsert, historySituation: .insertionFailedShown, historySession: session)
+            }
         }
     }
 
@@ -3868,19 +3868,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         hud.hide()
     }
 
-    private func saveAICommandTranscriptIfNeeded(
-        _ transcript: String,
-        settings: AICommandSettings?,
-        inputSource: AICommandInputSource
-    ) {
-        guard let settings else { return }
-        if inputHistoryStore.recordAICommandTranscriptIfNeeded(
-            transcript, settings: settings,
-            currentHistoryEnabled: settingsStore.settings.aiCommandSettings.historyEnabled,
-            inputSource: inputSource
-        ) != .saved {
+    @discardableResult
+    private func recordSessionOutput(
+        _ text: String, session: VoiceSession?, situation: HistoryRecordingPolicy.Situation,
+        cleanupDidFail: Bool = false, latencyMs: Int? = nil
+    ) -> UUID? {
+        guard let session, !session.isCancelled else { return nil }
+        let current = settingsStore.settings
+        let isAI = session.mode == .aiCommand
+        let isHandsFree = session.handsFreeSendSession != nil
+        let mode = isAI ? InputHistoryMode.aiCommand
+            : isHandsFree ? InputHistoryMode.handsFreeSend : InputHistoryMode.voiceInput
+        guard let decision = HistoryRecordingPolicy.decision(mode: mode, output: text, situation: situation,
+            cleanupEnabled: session.cleanupEnabledAtRecordingStart, cleanupDidFail: cleanupDidFail)
+        else { return nil }
+        let enabled = isAI ? current.aiCommandSettings.historyEnabled
+            : isHandsFree ? current.handsFreeSendSettings.historyEnabled : current.historyEnabled
+        let startEnabled = isAI ? session.aiCommandSettings?.historyEnabled == true : enabled
+        let retention = isAI ? current.aiCommandSettings.historyRetentionDays
+            : isHandsFree ? current.handsFreeSendSettings.historyRetentionDays : current.historyRetentionDays
+        if inputHistoryStore.recordOutput(id: session.id, mode: mode, output: text,
+            kind: decision.kind, status: decision.status, marks: decision.marks,
+            sourceLabel: isAI ? session.inputSource : nil, startHistoryEnabled: startEnabled,
+            currentHistoryEnabled: enabled, retentionDays: retention,
+            cleanupEnabled: !isAI && session.cleanupEnabledAtRecordingStart,
+            cleanupDidFail: cleanupDidFail, latencyMs: latencyMs) != .saved {
             noteHistoryStorageFailure()
         }
+        return inputHistoryStore.entries.contains(where: { $0.id == session.id }) ? session.id : nil
     }
 
     private func processAICommand(transcript: String, session: VoiceSession) async {
@@ -4131,6 +4146,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             operation: operation,
             clipboardVariantEnabled: clipboardVariantEnabled
         )
+        switch insertionResult {
+        case .inserted, .unicodeSubmitted, .scopedClipboardFallbackSubmitted,
+             .clipboardVariantPasteConfirmed, .clipboardVariantPasteSubmittedUnverified:
+            recordSessionOutput(text, session: session, situation: .inserted)
+        default: break
+        }
         // 所有権を失った後でも、variant pasteの送出結果だけは必ず記録する。ここを
         // `guard`より後に置くと、Escape時に「⌘Vを送ったか」が記録から消える。
         if usesClipboardVariant {
@@ -4182,6 +4203,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         notice: String? = nil
     ) {
         guard !session.isCancelled else { return }
+        recordSessionOutput(text, session: session, situation: .shownInWindow)
         appState.setPhase(.idle)
         hud.clearAICommandState()
         hud.hide()
@@ -4216,22 +4238,101 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     /// 通常・ハンズフリーの、自動では入力・送信しなかった結果を表示する。
-    private func presentDictationResult(_ text: String, notice: DictationResultNotice) {
+    private func presentDictationResult(_ text: String, notice: DictationResultNotice, session: VoiceSession? = nil) {
         presentNormalInputFallback(
             text,
-            notice: DictationCleanupMessages.noticeKeys(notice).map(uiText).joined(separator: "\n")
+            notice: DictationCleanupMessages.noticeKeys(notice).map(uiText).joined(separator: "\n"),
+            allowsInsertion: true, historySituation: .reviewShown, historySession: session
         )
     }
 
-    private func presentNormalInputFallback(_ text: String, notice: String? = nil) {
+    private var dictationReviewSession: VoiceSession?
+    private var pendingHistoryCleanupDidFail = false
+
+    private func presentNormalInputFallback(_ text: String, notice: String? = nil, allowsInsertion: Bool = false,
+                                            historySituation: HistoryRecordingPolicy.Situation? = .shownInWindow,
+                                            historySession: VoiceSession? = nil) {
+        let session = dictationReviewSession
+        // History is recorded for the session that produced the text, never a later one.
+        let historyID = historySituation.flatMap {
+            recordSessionOutput(text, session: historySession ?? session, situation: $0,
+                                cleanupDidFail: pendingHistoryCleanupDidFail)
+        }
+        let target = session?.normalPasteTarget
+        let destination = session?.insertionDestination
+        let action = AICommandResultAction(
+            id: "insert-dictation-result",
+            title: settingsStore.settings.languagePreferences.uiLanguage == .english ? "Insert" : "この内容で挿入",
+            style: .primary,
+            handler: { [weak self] in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    guard self.activeVoiceSession == nil, self.appState.phase == .idle else {
+                        self.showDictationCopyNotice(text, reason: "録音または処理中のため挿入できません。", english: "Cannot insert while recording or processing.")
+                        return
+                    }
+                    guard let target, destination != nil,
+                          let app = NSRunningApplication(processIdentifier: target.processIdentifier),
+                          !app.isTerminated, app.bundleIdentifier == target.bundleIdentifier else {
+                        self.showDictationCopyNotice(text, reason: "挿入先を確認できませんでした。コピーして貼り付けてください。", english: "The destination could not be confirmed. Copy and paste the output.")
+                        return
+                    }
+                    _ = app.activate(options: [])
+                    try? await Task.sleep(nanoseconds: 200_000_000)
+                    guard self.activeVoiceSession == nil, self.appState.phase == .idle,
+                          NSWorkspace.shared.frontmostApplication?.processIdentifier == target.processIdentifier else {
+                        self.showDictationCopyNotice(text, reason: "入力先へ戻れなかったか、録音または処理が開始されました。", english: "The destination could not be activated, or recording or processing started.")
+                        return
+                    }
+                    let outcome = await self.textInjector.insert(
+                        text, forNormalTarget: target, verificationDestination: destination,
+                        allowExternalCompatibility: session?.allowsCompatibility(
+                            currentEnabled: self.settingsStore.settings.externalAppCompatibilitySettings.enabled
+                        ) ?? false,
+                        allowScopedClipboardFallback: session?.allowsScopedClipboardFallback(
+                            currentEnabled: self.settingsStore.settings.externalAppCompatibilitySettings.enabled,
+                            currentAllowed: self.settingsStore.settings.externalAppCompatibilitySettings.allowScopedClipboardFallback
+                        ) ?? false,
+                        allowUnverifiedMultilineText: false,
+                        liveCompatibilityConsent: {
+                            session?.allowsCompatibility(currentEnabled: self.settingsStore.settings.externalAppCompatibilitySettings.enabled) ?? false
+                        },
+                        liveScopedClipboardConsent: {
+                            session?.allowsScopedClipboardFallback(
+                                currentEnabled: self.settingsStore.settings.externalAppCompatibilitySettings.enabled,
+                                currentAllowed: self.settingsStore.settings.externalAppCompatibilitySettings.allowScopedClipboardFallback
+                            ) ?? false
+                        }
+                    )
+                    switch outcome.result {
+                    case .inserted, .unicodeSubmitted, .scopedClipboardFallbackSubmitted:
+                        if let historyID,
+                           self.inputHistoryStore.updateInsertStatus(id: historyID,
+                               status: InputHistoryInsertStatus.inserted) != .saved {
+                            self.noteHistoryStorageFailure()
+                        }
+                    case .externalCompatibilityDisabled:
+                        self.presentExternalCompatibilityGuide(returnToProcessIdentifier: target.processIdentifier, deferredNormalOutput: text, recordsHistory: false)
+                    default:
+                        self.showDictationCopyNotice(text, reason: "挿入を確認できませんでした。コピーして貼り付けてください。", english: "Insertion could not be confirmed. Copy and paste the output.")
+                    }
+                }
+            },
+            closesBeforeHandling: true
+        )
         aiCommandResultWindows.show(AICommandResultPayload(
-            spokenInstruction: "",
-            selectedText: nil,
-            answer: text,
-            title: "音声入力結果",
-            notice: notice,
-            answerSectionTitle: "出力",
-            copyButtonTitle: "出力をコピー"
+            spokenInstruction: "", selectedText: nil, answer: text, title: "音声入力結果",
+            notice: notice, answerSectionTitle: "出力", copyButtonTitle: "出力をコピー",
+            actions: allowsInsertion && session?.handsFreeSendSession == nil ? [action] : []
+        ))
+    }
+
+    private func showDictationCopyNotice(_ text: String, reason: String, english: String) {
+        let notice = settingsStore.settings.languagePreferences.uiLanguage == .english
+            ? english : reason
+        aiCommandResultWindows.show(AICommandResultPayload(
+            spokenInstruction: "", selectedText: nil, answer: text, title: "音声入力結果",
+            notice: notice, answerSectionTitle: "出力", copyButtonTitle: "出力をコピー"
         ))
     }
 
@@ -4240,9 +4341,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private func presentExternalCompatibilityGuide(
         returnToProcessIdentifier: pid_t? = nil,
         deferredNormalOutput: String? = nil,
+        recordsHistory: Bool = true,
         aiCommandActions: [AICommandResultAction] = [],
         afterEnable: (() -> Void)? = nil
     ) {
+        if recordsHistory, let deferredNormalOutput {
+            recordSessionOutput(deferredNormalOutput, session: dictationReviewSession,
+                                situation: .shownInWindow, cleanupDidFail: pendingHistoryCleanupDidFail)
+        }
         let compatibilityExplanation = uiText("互換入力モードをONにすると、外部アプリでの選択取得と、クリップボードを変更しない仮想入力を使った直接入力を許可します。入力欄によっては反映を確認できないことがあります。")
         let hasDeferredNormalOutput = deferredNormalOutput != nil
         let enableCompatibilityAction = AICommandResultAction(
@@ -4504,25 +4610,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         appState.setPhase(.idle)
         hud.clearAICommandState()
         hud.hide()
-    }
-
-    private func recordInputHistoryIfNeeded(
-        mode: String,
-        historyEnabled: Bool,
-        historyRetentionDays: Int,
-        textToInsert: String,
-        cleanupEnabled: Bool,
-        cleanupDidFail: Bool,
-        insertResult: TextInjectorResult,
-        cleanupLatencyMs: Int?
-    ) {
-        if inputHistoryStore.recordNormalInputIfNeeded(
-            mode: mode, historyEnabled: historyEnabled, historyRetentionDays: historyRetentionDays,
-            textToInsert: textToInsert, cleanupEnabled: cleanupEnabled, cleanupDidFail: cleanupDidFail,
-            insertResult: insertResult, cleanupLatencyMs: cleanupLatencyMs
-        ) != .saved {
-            noteHistoryStorageFailure()
-        }
     }
 
     func clearHistoryStorageNoticeIfRecovered() {

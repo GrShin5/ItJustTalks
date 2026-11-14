@@ -825,7 +825,6 @@ public struct ResultValidator: Sendable {
             where !NumberExtractor.sequence(in: term, excludingIdioms: false).isEmpty {
             outputText = outputText.replacingOccurrences(of: term, with: " ")
         }
-        let produced = NumberExtractor.sequence(in: outputText, excludingIdioms: true)
         let sourceAnalysis = NumberExtractor.analyze(input.source, excludingIdioms: false)
         let sourceValues = sourceAnalysis.tokens.map(\.value)
         var licensedValues = sourceValues
@@ -834,6 +833,20 @@ public struct ResultValidator: Sendable {
                 licensedValues += NumberExtractor.sequence(in: text, excludingIdioms: false)
             }
         }
+        var producedTokens = NumberExtractor.analyze(outputText, excludingIdioms: true).tokens
+        if input.task == .translate {
+            // Translation only: an impersonal "one" before a modal ("one may feel tired") is excused only
+            // as a surplus 1 the source does not license, so a counted "one" is never hidden.
+            let pronoun = NumberExtractor.translationPronounOnes(outputText)
+            producedTokens.removeAll { pronoun.modalMay.contains($0.offset) }
+            var surplus = producedTokens.filter { $0.value == "1" }.count - licensedValues.filter { $0 == "1" }.count
+            producedTokens.removeAll { token in
+                guard surplus > 0, token.value == "1", pronoun.ones.contains(token.offset) else { return false }
+                surplus -= 1
+                return true
+            }
+        }
+        let produced = producedTokens.map(\.value)
         let newCount = Set(produced).subtracting(licensedValues).count
         guard newCount == 0 else { return NumberCheck(newCount: newCount, mismatch: false) }
 
@@ -875,11 +888,16 @@ public struct ResultValidator: Sendable {
         let analysis = NumberExtractor.analyze(sourceText, excludingIdioms: true)
         let retracted = input.task == .cleanup ? retractedIndices(analysis) : []
         let outputAnalysis = NumberExtractor.analyze(outputText, excludingIdioms: true)
+        // Translation only: each English singular article phrase ("an apple") may stand for one source
+        // quantity of exactly 1 with a Japanese counter (「りんご1個」), after real numerals are matched.
+        let articlePhrases = input.task == .translate ? NumberExtractor.singularArticlePhraseCount(outputText) : 0
+        var countedOnes = 0
         // Only a certified adjacent repetition may collapse; clauses with equal quantities remain distinct.
         var required: [String: Int] = [:]
         var bareMonths = NumberExtractor.bareCapitalizedMonths(in: outputAnalysis)
             .reduce(into: [String: Int]()) { $0[$1, default: 0] += 1 }
         for (index, token) in analysis.tokens.enumerated() where !retracted.contains(index) {
+            if articlePhrases > 0, NumberExtractor.isJapaneseCountedOne(token, in: analysis) { countedOnes += 1 }
             // A bare output month only preserves its corresponding source month, never a general quantity.
             if let month = NumberExtractor.ambiguousMonthName(token, in: analysis), bareMonths[month, default: 0] > 0 {
                 bareMonths[month, default: 0] -= 1
@@ -910,7 +928,9 @@ public struct ResultValidator: Sendable {
             let key = token.value
             counts[key, default: 0] += 1
         }
-        return required.reduce(0) { $0 + max(0, $1.value - available[$1.key, default: 0]) }
+        let missing = required.reduce(0) { $0 + max(0, $1.value - available[$1.key, default: 0]) }
+        let missingOnes = max(0, required["1", default: 0] - available["1", default: 0])
+        return missing - min(missingOnes, countedOnes, articlePhrases)
     }
 
     /// Cleanup source for the dropped-span check: certified retractions blanked, plus number corrections

@@ -87,42 +87,6 @@ enum SendKeyVerificationMode {
     case exactCapturedEditableField
 }
 
-/// 通常モードの出力を履歴本文として保存できるかを決める、UI非依存の純粋な判定。
-enum NormalInputHistoryPolicy {
-    static func shouldRecord(_ result: TextInjectorResult) -> Bool {
-        switch result {
-        case .inserted, .unicodeSubmitted, .scopedClipboardFallbackSubmitted:
-            return true
-        case .externalCompatibilityDisabled, .manualFallbackRequired,
-             .clipboardMayHaveBeenLost, .insertionUnconfirmed, .secureInputBlocked, .failed,
-             .clipboardVariantPasteConfirmed, .clipboardVariantPasteSubmittedUnverified,
-             .clipboardVariantPasteMayHaveLostClipboard:
-            return false
-        }
-    }
-
-    static func shouldStoreText(
-        historyEnabled: Bool,
-        cleanupEnabled: Bool,
-        cleanupDidFail: Bool,
-        output: String,
-        result: TextInjectorResult
-    ) -> Bool {
-        guard historyEnabled,
-              shouldRecord(result),
-              !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return false
-        }
-        return !cleanupEnabled || !cleanupDidFail
-    }
-
-    static func storedTextKind(cleanupEnabled: Bool) -> String {
-        cleanupEnabled
-            ? InputHistoryStoredTextKind.aiAssistedOutput
-            : InputHistoryStoredTextKind.rawTranscriptOutput
-    }
-}
-
 /// 一般clipboardを使うCmd-Vは外部アプリの受領を検証できないため、既定では自動実行しない。
 /// ここを切り替える時は、clipboard保持・復元・連続入力・HFS Returnをまとめて実機検証する。
 enum UnverifiedExternalPastePolicy {

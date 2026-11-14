@@ -21,6 +21,7 @@ struct SelfCorrectionTests {
         "Send the invoice to Mark, I mean Julia",
         "We meet at the cafe, actually, at the library",
         "Order the blue one. Scratch that, the red one",
+        "リリースはbetaじゃなくてstableに出します",
     ])
     func cueDetected(_ transcript: String) {
         #expect(SelfCorrection.hasCue(in: transcript), "\(transcript)")
@@ -54,6 +55,13 @@ struct SelfCorrectionTests {
         ("Book a table for six, no wait, eight people", "six", "eight", "Book a table for eight people"),
         ("Send it to Al, I mean, Alice", "Al", "Alice", "Send it to Alice"),
         ("Please keep the draft, I mean, delete the draft", "keep the draft", "delete the draft", "Please delete the draft"),
+        // An English retraction stretched over the clause is narrowed to the replaced word.
+        ("hang the map near the window no wait door before noon", "hang the map near the window", "door",
+         "hang the map near the door before noon"),
+        ("park the van by the north gate no wait south gate today", "park the van by the north gate", "south gate",
+         "park the van by the south gate today"),
+        ("move the lamp closer to the sofa no wait desk the rug stays here", "move the lamp closer to the sofa",
+         "desk the rug stays here", "move the lamp closer to the desk the rug stays here"),
     ])
     func applies(_ c: (String, String, String, String)) {
         let outcome = SelfCorrection.apply([(c.1, c.2)], to: c.0)
@@ -88,12 +96,79 @@ struct SelfCorrectionTests {
         #expect(SelfCorrection.apply([(c.1, c.2)], to: c.0).corrected == nil, "\(c.0) / \(c.1)")
     }
 
-    @Test func oneUnverifiableProposalFallsBackEntirely() {
+    @Test func keepsVerifiedCorrectionAndDropsUnverifiableProposal() {
         let transcript = "部屋は二階、いや三階で、時間は四時、やっぱり五時です"
         let outcome = SelfCorrection.apply([("二階", "三階"), ("六時", "五時")], to: transcript)
-        #expect(outcome.corrected == nil)
-        // The verified retraction is still handed to the validator.
+        #expect(outcome.corrected == "部屋は三階で、時間は四時、やっぱり五時です")
+        #expect(outcome.verifiedProposals == 1)
+        #expect(outcome.droppedProposals == 1)
         #expect(outcome.spans.map(\.retracted) == ["二階"])
+    }
+
+    @Test(arguments: [
+        "来週の月曜いや来週の火曜に",
+        "14枚いや19枚",
+        "東倉庫じゃなくて西倉庫",
+    ])
+    func unpunctuatedParallelCueTriggers(_ transcript: String) {
+        #expect(SelfCorrection.hasCue(in: transcript))
+    }
+
+    @Test(arguments: ["じゃなくて", "ではなくて", "じゃなく", "ではなく", "でなくて", "でなく"])
+    func unpunctuatedContrastDoesNotTrigger(_ cue: String) {
+        for ending in ["夜の方が好き", "夜のほうが好き", "夜のが好き", "夜倉庫の方が好き"] {
+            #expect(!SelfCorrection.hasCue(in: "朝倉庫" + cue + ending))
+        }
+        #expect(!SelfCorrection.hasCue(in: "朝じゃなくて夜の方が好き"))
+    }
+
+    @Test(arguments: [false, true])
+    func overlappingUnverifiableProposalDropsBoth(_ reverse: Bool) {
+        let pairs = [("二階", "三階"), ("二階", "六階")]
+        let outcome = SelfCorrection.apply(reverse ? Array(pairs.reversed()) : pairs,
+            to: "部屋は二階、いや三階で、時間は四時です")
+        #expect(outcome.corrected == nil)
+        #expect(outcome.spans.isEmpty)
+        #expect(outcome.verifiedProposals == 0)
+        #expect(outcome.droppedProposals == 2)
+    }
+
+    @Test(arguments: [
+        ("予定は来週の月曜いや来週の火曜にします", "来週の月曜", "来週の火曜", "予定は来週の火曜にします"),
+        ("注文は14枚いや19枚にします", "14枚", "19枚", "注文は19枚にします"),
+        ("搬入は東倉庫じゃなくて西倉庫にします", "東倉庫", "西倉庫", "搬入は西倉庫にします"),
+    ])
+    func appliesUnpunctuatedCorrection(_ c: (String, String, String, String)) {
+        let outcome = SelfCorrection.apply([(c.1, c.2)], to: c.0)
+        #expect(outcome.corrected == c.3)
+        #expect(outcome.verifiedProposals == 1)
+        #expect(outcome.droppedProposals == 0)
+    }
+
+    @Test func stageMeasuresCountPartialVerification() async {
+        let json = #"{"corrections":[{"retracted":"二階","replacement":"三階"},{"retracted":"六時","replacement":"五時"}]}"#
+        let fake = FakeGenerator(script: [.init(.text(json, usage: TokenUsage(inputTokens: 1, outputTokens: 1)))])
+        let result = await CleanupPipeline().selfCorrectionStage(
+            CleanupInput(transcript: "部屋は二階、いや三階で、時間は四時、やっぱり五時です",
+                         promptLanguage: .ja, handsFree: false),
+            using: ChunkTestExecutor(generator: fake))
+        #expect(result.transcriptForCleanup == "部屋は三階で、時間は四時、やっぱり五時です")
+        #expect(result.measures["stageA.verifiedProposals"] == 1)
+        #expect(result.measures["stageA.droppedProposals"] == 1)
+    }
+
+    @Test func conflictDoesNotDiscardIndependentCorrection() {
+        let outcome = SelfCorrection.apply([("二階", "三階"), ("二階", "六階"), ("四時", "五時")],
+            to: "部屋は二階、いや三階で、時間は四時、やっぱり五時です")
+        #expect(outcome.corrected == "部屋は二階、いや三階で、時間は五時です")
+        #expect(outcome.spans == [SelfCorrectionSpan(retracted: "四時", replacement: "五時")])
+        #expect(outcome.verifiedProposals == 1)
+        #expect(outcome.droppedProposals == 2)
+    }
+
+    @Test func suffixMatchBeyondFifteenCharactersDoesNotTrigger() {
+        #expect(!SelfCorrection.hasCue(in: "甲倉庫いや" + String(repeating: "乙", count: 15) + "倉庫"))
+        #expect(SelfCorrection.hasCue(in: "東倉庫じゃなくて、西倉庫の方が好き"))
     }
 
     @Test func noProposalsKeepTheTranscript() {
@@ -210,5 +285,32 @@ struct SelfCorrectionTailTests {
     @Test func tailWithContentWordsIsKept() {
         // "には行かない" has a kanji: not a kana tail, so the proposal cannot be verified.
         #expect(SelfCorrection.apply([("北口", "南口")], to: "待ち合わせは北口には行かない、いや南口にする").corrected == nil)
+    }
+}
+
+@Suite("Self-correction review fixes")
+struct SelfCorrectionReviewFixTests {
+    @Test func apologyIsNotARetraction() {
+        let outcome = SelfCorrection.apply([(retracted: "遅れてすみません", replacement: "10分で着きます")], to: "遅れてすみません、10分で着きます")
+        #expect(outcome.corrected == nil || outcome.corrected == "遅れてすみません、10分で着きます")
+    }
+
+    @Test func emphaticYappariIsNotACue() {
+        #expect(!SelfCorrection.hasCue(in: "夏はやっぱり夏祭りだよね"))
+        #expect(SelfCorrection.hasCue(in: "封筒は14枚いや19枚用意して"))
+    }
+
+    @Test func englishWholeStatementWithPronounIsNotNarrowed() {
+        let outcome = SelfCorrection.apply([("let's go to the park", "we stay home")],
+                                           to: "let's go to the park, actually we stay home")
+        #expect(outcome.corrected == "we stay home")
+    }
+
+    @Test func englishNarrowingNeedsADeterminerBeforeTheReplacedWords() {
+        let a = SelfCorrection.apply([("Schedule the review with Priya on Thursday", "with Daniel")],
+                                     to: "Schedule the review with Priya on Thursday, sorry, with Daniel")
+        #expect(a.corrected != "Schedule the review with Priya with Daniel")
+        let b = SelfCorrection.apply([("I'll take the blue one", "red")], to: "I'll take the blue one, actually red")
+        #expect(b.corrected != "I'll take the blue red")
     }
 }

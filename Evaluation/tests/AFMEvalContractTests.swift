@@ -456,3 +456,34 @@ private func writeRows(_ values: [[String: Any]], to url: URL) throws {
     #expect(missing["generationPath"] as? String == "e2e")
     #expect(missing["pass"] as? Bool == false)
 }
+
+@Test func fidelityIsAdditionalAndPreservesOpenTail() {
+    var item = cleanupCase(transcript: "確認して", required: ["確認"])
+    let before = Judge.cleanup(item, output: "確認して。")
+    item.reference = "確認して"
+    item.endsOpen = true
+    let after = Judge.cleanup(item, output: "確認して。")
+    #expect(before.pass == after.pass)
+    #expect(before.failedChecks == after.failedChecks)
+    #expect(after.fidelity?.refCER == 0)
+    #expect(after.fidelity?.endsOpenKept == false)
+    #expect(Judge.cleanup(item, output: "確認して").fidelity?.endsOpenKept == true)
+}
+
+@Test func fidelityCountsAlignedPunctuationAndDictionarySpans() {
+    var item = cleanupCase(transcript: "あいうえ", required: [])
+    item.reference = "あ、いう。え"
+    let metrics = FidelityMetrics(item, output: "あい、う。え")
+    #expect(metrics.punctuation?["comma"]?.f1 == 0)
+    #expect(metrics.punctuation?["period"]?.f1 == 1)
+    #expect(FidelityMetrics.distance(Array("abc"), Array("adc")) == 1)
+    item.dictionarySurfaces = ["XYZ", "YZ"]
+    let extra = FidelityMetrics(item, output: "あいうえXYZ!")
+    #expect(extra.addedChars == 0)
+    #expect(extra.dictionaryHits == 2)
+    #expect(extra.dictionaryOccurrences == [1, 1])
+    let deleted = FidelityMetrics(item, output: "あうえ")
+    #expect(deleted.unauthorizedDeletedChars == 1)
+}
+
+

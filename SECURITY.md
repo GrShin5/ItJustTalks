@@ -24,7 +24,7 @@ Include as much detail as you can:
 
 ## Supported versions
 
-This documentation targets ItJustTalks 0.1.1. There is no formal support
+This documentation targets ItJustTalks 0.2.0. There is no formal support
 matrix; only the latest published release is supported. When a release tag
 is available, reproduce against a fresh build from that tag, obtained and
 verified as described in the README, before reporting.
@@ -64,9 +64,11 @@ the documented limits is welcome; please use the private reporting channel.
   clipboard contents could not be restored. Other clipboard tools and
   Universal Clipboard follow their own behavior and settings.
 - **History is enabled by default.** Retention is 180 days per mode; users
-  can disable saving and delete existing entries in the History tab. AI
-  Command and clipboard history save the spoken instruction, not the target
-  text or generated answer. Backups and exports have separate retention.
+  can disable saving and delete existing entries in the History tab. Each
+  mode saves only its final output text when there was output; AI Command and
+  clipboard history save the generated output, never the spoken instruction.
+  Outputs can contain text from the selection or clipboard. Backups and exports
+  have separate retention.
 - **Insertion and sending depend on the target app.** Uncertain insertion
   does not trigger automatic repasting or resending. Some compatibility
   paths cannot verify every inserted character and require additional

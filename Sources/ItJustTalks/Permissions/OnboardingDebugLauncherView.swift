@@ -236,7 +236,7 @@ struct OnboardingDebugLauncherView: View {
                 )
             )
             settingRow(
-                uiText("AIに指示モードの入力履歴"),
+                uiText("AIに指示モードの出力履歴"),
                 historyRetentionLabel(
                     isEnabled: settingsStore.settings.aiCommandSettings.historyEnabled,
                     retentionDays: settingsStore.settings.aiCommandSettings.historyRetentionDays
